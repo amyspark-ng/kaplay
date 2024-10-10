@@ -87,7 +87,7 @@
 - added `patrol()` component to move along a list of waypoints.
 - added `sentry()` component to notify when certain objects are in sight.
 - added `NavMesh` class for pathfinding on a mesh.
-- added `navigation()` component to calculate a list of waypoints on a graph.
+- added `pathfinder()` component to calculate a list of waypoints on a graph.
 - now collision checks are only done if there's area objects.
 
 ## Game Object
@@ -345,6 +345,7 @@
 - fix error where error screen was not showing when the error was thrown in a
   input event
 - fix error where fonts was cropped in the bottom
+- fix an error where `stay()` object loose their input events on scene change
 
 ### v3000.1.17
 

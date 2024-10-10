@@ -27,7 +27,7 @@ import {
     type QueryOpt,
     type Tag,
 } from "../types";
-import { type KEventController, KEventHandler, uid } from "../utils";
+import { KEventController, KEventHandler, uid } from "../utils";
 
 export function make<T>(comps: CompList<T> = []): GameObj<T> {
     const compStates = new Map<string, Comp>();
@@ -96,6 +96,7 @@ export function make<T>(comps: CompList<T> = []): GameObj<T> {
 
         remove(obj: GameObj): void {
             const idx = this.children.indexOf(obj);
+
             if (idx !== -1) {
                 obj.parent = null;
                 this.children.splice(idx, 1);
@@ -598,8 +599,20 @@ export function make<T>(comps: CompList<T> = []): GameObj<T> {
             const ev = app[e]?.(...args);
             inputEvents.push(ev);
 
-            // TODO: what if the game object is destroy and re-added
             obj.onDestroy(() => ev.cancel());
+            obj.on("sceneEnter", () => {
+                // All app events are already canceled by changing the scene
+                // not neccesary -> ev.cancel();
+                inputEvents.splice(inputEvents.indexOf(ev), 1);
+                // create a new event with the same arguments
+                const newEv = app[e]?.(...args);
+
+                // Replace the old event handler with the new one
+                // old KEventController.cancel() => new KEventController.cancel()
+                KEventController.replace(ev, newEv);
+                inputEvents.push(ev);
+            });
+
             return ev;
         };
     }
