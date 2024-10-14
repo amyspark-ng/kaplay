@@ -2,6 +2,7 @@ import { dt } from "../../app";
 import { drawRaw, type Texture } from "../../gfx";
 import {
     Color,
+    deg2rad,
     lerp,
     map,
     Quad,
@@ -14,6 +15,9 @@ import {
 import type { Comp, Vertex } from "../../types";
 import { KEvent } from "../../utils/";
 
+/**
+ * A particle. Used on the {@link particles `particles()`} component.
+ */
 class Particle {
     pos: Vec2 = vec2(0);
     vel: Vec2 = vec2(0);
@@ -35,6 +39,9 @@ class Particle {
     }
 }
 
+/**
+ * Options for the {@link particles `particles()`}'s component
+ */
 export type EmitterOpt = {
     /*
      * Shape of the emitter. If given, particles spwan within this shape.
@@ -58,6 +65,11 @@ export type EmitterOpt = {
     spread: number;
 };
 
+/**
+ * Options for the {@link particles `particles()`}'s component
+ *
+ * @group Component Types
+ */
 export type ParticlesOpt = {
     /*
      * Maximum number of simultaneously rendered particles.
@@ -109,6 +121,11 @@ export type ParticlesOpt = {
     texture: Texture;
 };
 
+/**
+ * The {@link particles `particles()`} component.
+ *
+ * @group Component Types
+ */
 export interface ParticlesComp extends Comp {
     /*
      * Emit a number of particles
@@ -129,16 +146,16 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
     const quads = popt.quads || [new Quad(0, 0, 1, 1)];
     const scales = popt.scales || [1];
     const lifetime = popt.lifeTime;
-    const direction = eopt.direction;
-    const spread = eopt.spread;
+    const direction = eopt.direction || 0;
+    const spread = eopt.spread || 0;
     const speed = popt.speed || [0, 0];
     const angleRange = popt.angle || [0, 0];
     const angularVelocityRange = popt.angularVelocity || [0, 0];
     const accelerationRange = popt.acceleration || [vec2(0), vec2(0)];
     const dampingRange = popt.damping || [0, 0];
 
-    const indices: number[] = [];
-    const vertices: Vertex[] = new Array<Vertex>(popt.max);
+    const indices: number[] = new Array<number>(popt.max * 6);
+    const vertices: Vertex[] = new Array<Vertex>(popt.max * 4);
     let count = 0;
     let time = 0;
 
@@ -176,6 +193,7 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
     return {
         id: "particles",
         emit(n: number) {
+            n = Math.min(n, popt.max - count);
             let index: number | null = 0;
             for (let i = 0; i < n; i++) {
                 index = nextFree(index);
@@ -207,6 +225,7 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
                     : vec2();
 
                 const p = particles[index];
+                p.t = 0;
                 p.lt = lt;
                 p.pos = pos;
                 p.vel = vel;
@@ -214,7 +233,6 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
                 p.angle = angle;
                 p.angularVelocity = angularVelocity;
                 p.damping = damping;
-                p.angularVelocity = angularVelocity;
                 p.gc = false;
             }
             count += n;
@@ -225,12 +243,13 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
             }
             const DT = dt();
             // Update all particles
-            for (const p of particles) {
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
                 if (p.gc) {
                     continue;
                 }
                 p.t += DT;
-                if (p.lt && p.t >= p.lt) {
+                if (p.lt !== null && p.t >= p.lt) {
                     p.gc = true;
                     count--;
                     continue;
@@ -253,12 +272,14 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
                 && time > eopt.rate
             ) {
                 this.emit(1);
-                count++;
                 time -= eopt.rate;
             }
         },
         draw() {
-            if (emitterLifetime !== undefined && emitterLifetime <= 0) {
+            if (
+                (emitterLifetime !== undefined && emitterLifetime <= 0)
+                || count == 0
+            ) {
                 return;
             }
 
@@ -266,10 +287,14 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
             for (let i = 0; i < particles.length; i++) {
                 const p = particles[i];
                 if (p.gc) {
+                    vertices[i * 4].opacity = 0;
+                    vertices[i * 4 + 1].opacity = 0;
+                    vertices[i * 4 + 2].opacity = 0;
+                    vertices[i * 4 + 3].opacity = 0;
                     continue;
                 }
                 const progress = p.progress;
-                const colorIndex = Math.floor(p.progress * colors.length);
+                const colorIndex = Math.floor(progress * colors.length);
                 const color = colorIndex < colors.length - 1
                     ? lerp(
                         colors[colorIndex],
@@ -283,7 +308,7 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
                         ),
                     )
                     : colors[colorIndex];
-                const opacityIndex = Math.floor(p.progress * opacities.length);
+                const opacityIndex = Math.floor(progress * opacities.length);
                 const opacity = opacityIndex < opacities.length - 1
                     ? lerp(
                         opacities[opacityIndex],
@@ -298,16 +323,17 @@ export function particles(popt: ParticlesOpt, eopt: EmitterOpt): ParticlesComp {
                     )
                     : opacities[opacityIndex];
 
-                const quadIndex = Math.floor(p.progress * quads.length);
+                const quadIndex = Math.floor(progress * quads.length);
                 const quad = quads[quadIndex];
-                const scaleIndex = Math.floor(p.progress * scales.length);
+                const scaleIndex = Math.floor(progress * scales.length);
                 const scale = scales[scaleIndex];
-                const c = Math.cos(p.angle * Math.PI / 180);
-                const s = Math.sin(p.angle * Math.PI / 180);
+                const angle = deg2rad(p.angle);
+                const c = Math.cos(angle);
+                const s = Math.sin(angle);
 
-                const hw = (popt.texture ? popt.texture.width : 10) * quad.w
+                const hw = popt.texture.width * quad.w
                     / 2;
-                const hh = (popt.texture ? popt.texture.height : 10) * quad.h
+                const hh = popt.texture.height * quad.h
                     / 2;
 
                 let j = i * 4;
