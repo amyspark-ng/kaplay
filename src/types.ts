@@ -12,6 +12,7 @@ import type {
     LoadBitmapFontOpt,
     LoadSpriteOpt,
     LoadSpriteSrc,
+    Palette,
     ShaderData,
     SoundData,
     SpriteAtlasData,
@@ -3119,6 +3120,30 @@ export interface KAPLAYCtx<
      * @group Assets
      */
     load<T>(l: Promise<T>): Asset<T>;
+    /** Loads a .gpl palette
+     * @param name The name to load the palette
+     * @param The path to the .gpl file
+     * @param colorNames The names in order of each color (you can find them in Palette.data later)
+     */
+    loadPalette(
+        name: string,
+        path: string,
+        colorNames?: string[],
+    ): Asset<Palette>;
+    /** Gets the asset object with all the colors in a palette
+     *
+     * @example
+     * ```js
+     * const mulfok32Asset = getPalette("mulfok32");
+     * const mulfok32 = mulfok32Asset.data;
+     *
+     * add([
+     *      rect(50, 50),
+     *      color(mulfok32["red"])
+     * ]),
+     * ```
+     */
+    getPalette(name: string): Asset<Palette>;
     /**
      * Get the global asset loading progress (0.0 - 1.0).
      *

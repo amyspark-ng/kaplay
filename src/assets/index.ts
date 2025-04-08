@@ -8,3 +8,4 @@ export * from "./sound";
 export * from "./sprite";
 export * from "./spriteAtlas";
 export * from "./utils";
+export * from "./palette"

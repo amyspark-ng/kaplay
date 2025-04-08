@@ -5,6 +5,7 @@ import { _k } from "../kaplay";
 import { KEvent } from "../utils";
 import type { BitmapFontData } from "./bitmapFont";
 import type { FontData } from "./font";
+import type { Palette } from "./palette";
 import type { ShaderData } from "./shader";
 import type { SoundData } from "./sound";
 import type { SpriteData } from "./sprite";
@@ -223,6 +224,7 @@ export const initAssets = (ggl: GfxCtx, spriteAtlasPadding: number) => {
         bitmapFonts: new AssetBucket<BitmapFontData>(),
         sounds: new AssetBucket<SoundData>(),
         shaders: new AssetBucket<ShaderData>(),
+        palettes: new AssetBucket<Palette>(),
         custom: new AssetBucket<any>(),
         music: {} as Record<string, string>,
         packer: new TexPacker(
