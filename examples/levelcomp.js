@@ -1,16 +1,19 @@
 /**
  * @file Level component
- * @description How to build levels out of tiles using level
+ * @description How to build levels out of tiles using the level component
  * @difficulty 1
  * @tags basics, comps
  * @minver 4000.0
  * @category concepts
  */
 
-// Build levels with level()
+// Build levels with the level() component
 
 // Start game
-kaplay();
+kaplay({
+    background: "#8db7ff",
+    scale: 1.5,
+});
 
 // Load assets
 loadSprite("bean", "/sprites/bean.png");
@@ -24,14 +27,20 @@ const SPEED = 480;
 
 setGravity(2400);
 
+add([
+    text("Create level with level() comp"),
+    color(BLACK),
+    color("1f102a"),
+]);
+
 const myLevel = add([
+    pos(60, 120), // Referring to the topleft anchor of the level
     level(
         [
             // Design the level layout with symbols
-            "         ",
-            "         ",
-            "  @  ^ $$",
-            "  =======",
+            "       ",
+            "@  ^ $$",
+            "=======",
         ],
         {
             // The size of each grid
@@ -41,7 +50,7 @@ const myLevel = add([
             tiles: {
                 "@": () => [
                     sprite("bean"),
-                    area(),
+                    area({ isSensor: true }),
                     body(),
                     anchor("bot"),
                     "player",
@@ -52,8 +61,18 @@ const myLevel = add([
                     body({ isStatic: true }),
                     anchor("bot"),
                 ],
-                $: () => [sprite("coin"), area(), anchor("bot"), "coin"],
-                "^": () => [sprite("spike"), area(), anchor("bot"), "danger"],
+                $: () => [
+                    sprite("coin"),
+                    area({ isSensor: true }),
+                    anchor("bot"),
+                    "coin",
+                ],
+                "^": () => [
+                    sprite("spike"),
+                    area({ isSensor: true }),
+                    anchor("bot"),
+                    "danger",
+                ],
             },
         },
     ),
@@ -77,7 +96,7 @@ onKeyDown("right", () => {
     player.move(SPEED, 0);
 });
 
-// Back to the original position if hit a "danger" item
+// Back to the original position if hit a "danger" item, in this case the topleft corner
 player.onCollide("danger", () => {
     player.pos = myLevel.tile2Pos(0, 0);
 });
