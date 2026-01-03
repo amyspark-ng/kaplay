@@ -11,22 +11,31 @@
 // Use state() component to handle basic AI
 
 // Start KAPLAY
-kaplay();
+kaplay({
+    scale: 1.5,
+});
+
+setBackground(rgb(123, 84, 128));
 
 // Load assets
 loadSprite("bean", "/sprites/bean.png");
 loadSprite("ghosty", "/sprites/ghosty.png");
+loadSprite("lightening", "/sprites/lightening.png");
 
 // Some constants
 const SPEED = 320;
 const ENEMY_SPEED = 160;
 const BULLET_SPEED = 800;
 
+add([
+    text("Escape from the ghost!"),
+]);
+
 // Add player game object
 const player = add([
     sprite("bean"),
     pos(80, 80),
-    area(),
+    area({ isSensor: true }),
     anchor("center"),
 ]);
 
@@ -52,13 +61,12 @@ enemy.onStateEnter("attack", async () => {
         const dir = player.pos.sub(enemy.pos).unit();
 
         add([
+            sprite("lightening"),
             pos(enemy.pos),
             move(dir, BULLET_SPEED),
-            rect(12, 12),
-            area(),
+            area({ isSensor: true }),
             offscreen({ destroy: true }),
             anchor("center"),
-            color(BLUE),
             "bullet",
         ]);
     }
@@ -88,6 +96,7 @@ player.onCollide("bullet", (bullet) => {
     destroy(bullet);
     destroy(player);
     addKaboom(bullet.pos);
+    burp();
 });
 
 // Register input handlers & movement
