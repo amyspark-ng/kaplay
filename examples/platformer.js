@@ -1,11 +1,21 @@
-// @ts-check
+/**
+ * @file Platformer
+ * @description A simple platformer
+ * @difficulty 1
+ * @tags basics, game
+ * @minver 3001.0
+ * @category games
+ */
 
 kaplay({
     background: [141, 183, 255],
+    narrowPhaseCollisionAlgorithm: "sat",
+    broadPhaseCollisionAlgorithm: "grid",
 });
 
+// setFixedSpeed("friedPotato");
+
 // load assets
-loadSprite("bigyoshi", "/examples/sprites/YOSHI.png");
 loadSprite("bean", "/sprites/bean.png");
 loadSprite("bag", "/sprites/bag.png");
 loadSprite("ghosty", "/sprites/ghosty.png");
@@ -16,23 +26,26 @@ loadSprite("prize", "/sprites/jumpy.png");
 loadSprite("apple", "/sprites/apple.png");
 loadSprite("portal", "/sprites/portal.png");
 loadSprite("coin", "/sprites/coin.png");
-loadSound("coin", "/examples/sounds/score.mp3");
-loadSound("powerup", "/examples/sounds/powerup.mp3");
-loadSound("blip", "/examples/sounds/blip.mp3");
-loadSound("hit", "/examples/sounds/hit.mp3");
-loadSound("portal", "/examples/sounds/portal.mp3");
+loadSound("coin", "sounds/score.mp3");
+loadSound("powerup", "sounds/powerup.mp3");
+loadSound("blip", "sounds/blip.mp3");
+loadSound("hit", "sounds/hit.mp3");
+loadSound("portal", "sounds/portal.mp3");
 
 setGravity(3200);
 
 // custom component controlling enemy patrol movement
-function patrol(speed = 60, dir = 1) {
+function customPatrol(speed = 60, dir = 1) {
     return {
         id: "patrol",
         require: ["pos", "area"],
         add() {
             this.on("collide", (obj, col) => {
-                if (col.isLeft() || col.isRight()) {
-                    dir = -dir;
+                if (col.isLeft()) {
+                    dir = 1;
+                }
+                else if (col.isRight()) {
+                    dir = -1;
                 }
             });
         },
@@ -149,7 +162,7 @@ const levelConf = {
         ],
         "$": () => [
             sprite("coin"),
-            area(),
+            area({ isSensor: true }),
             pos(0, -9),
             anchor("bot"),
             offscreen({ hide: true }),
@@ -173,7 +186,7 @@ const levelConf = {
         ],
         "#": () => [
             sprite("apple"),
-            area(),
+            area({ isSensor: true }),
             anchor("bot"),
             body(),
             offscreen({ hide: true }),
@@ -184,13 +197,13 @@ const levelConf = {
             area(),
             anchor("bot"),
             body(),
-            patrol(),
+            customPatrol(),
             offscreen({ hide: true }),
             "enemy",
         ],
         "@": () => [
             sprite("portal"),
-            area({ scale: 0.5 }),
+            area({ scale: 0.5, isSensor: true }),
             anchor("bot"),
             pos(0, -12),
             offscreen({ hide: true }),
@@ -219,7 +232,7 @@ scene("game", ({ levelId, coins } = { levelId: 0, coins: 0 }) => {
     // action() runs every frame
     player.onUpdate(() => {
         // center camera to player
-        camPos(player.pos);
+        setCamPos(player.pos);
         // check fall death
         if (player.pos.y >= FALL_DEATH) {
             go("lose");
@@ -234,7 +247,7 @@ scene("game", ({ levelId, coins } = { levelId: 0, coins: 0 }) => {
 
     player.onPhysicsResolve(() => {
         // Set the viewport center to player.pos
-        camPos(player.pos);
+        setCamPos(player.pos);
     });
 
     // if player onCollide with any obj with "danger" tag, lose

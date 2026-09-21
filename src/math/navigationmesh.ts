@@ -1,5 +1,6 @@
-import { Vec2, vec2 } from "./math";
+import { vec2 } from "./math";
 import { aStarSearch, type Graph } from "./navigation";
+import { Vec2 } from "./Vec2";
 
 class NavEdge {
     a: Vec2;
@@ -142,6 +143,9 @@ export class NavMesh implements Graph {
         }
         return null;
     }
+    get nodes(): number[] {
+        return [...this._polygons.keys()];
+    }
 
     addPolygon(vertices: Vec2[]) {
         const polygon = new NavPolygon(this._polygons.length);
@@ -173,7 +177,7 @@ export class NavMesh implements Graph {
         return null;
     }
 
-    getNeighbours(index: number): number[] {
+    getNeighbors(index: number): number[] {
         const neighbours = [];
         for (let edge of this._polygons[index].edges) {
             // Lookup polygons with reverse edge

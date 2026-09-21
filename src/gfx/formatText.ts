@@ -1,36 +1,53 @@
-import { Asset, type BitmapFontData, FontData, resolveFont } from "../assets";
-import {
-    DEF_FONT_FILTER,
-    DEF_TEXT_CACHE_SIZE,
-    FONT_ATLAS_HEIGHT,
-    FONT_ATLAS_WIDTH,
-    MULTI_WORD_RE,
-} from "../constants";
-import { fontCacheC2d, fontCacheCanvas, gfx } from "../kaplay";
-import { Color } from "../math/color";
-import { Quad, Vec2, vec2 } from "../math/math";
-import { type Outline, type TexFilter } from "../types";
-import { runes } from "../utils";
+import { Asset } from "../assets/asset";
+import type { BitmapFontData, GfxFont } from "../assets/bitmapFont";
+import { FontData, resolveFont } from "../assets/font";
+import { DEF_TEXT_CACHE_SIZE } from "../constants/general";
+import { Color, rgb } from "../math/color";
+import { vec2 } from "../math/math";
+import { _k } from "../shared";
+import type { Outline } from "../types";
+import { runes } from "../utils/runes";
 import { alignPt } from "./anchor";
-import type {
-    CharTransform,
-    DrawTextOpt,
-    FormattedChar,
-    FormattedText,
-} from "./draw";
-import { Texture } from "./gfx";
+import type { FormattedChar, FormattedText } from "./draw/drawFormattedText";
+import type { CharTransform, DrawTextOpt } from "./draw/drawText";
 
-type FontAtlas = {
+/**
+ * @group Rendering
+ * @subgroup Text
+ */
+export type FontAtlas = {
     font: BitmapFontData;
-    cursor: Vec2;
+    maxHeight: number;
     outline: Outline | null;
+    ascent: number;
+    descent: number;
+    lineHeight: number;
 };
 
-const fontAtlases: Record<string, FontAtlas> = {};
+/**
+ * @group Rendering
+ * @subgroup Text
+ */
+export type StyledTextInfo = {
+    charStyleMap: Record<number, [string, string][]>;
+    text: string;
+};
 
 function applyCharTransform(fchar: FormattedChar, tr: CharTransform) {
+    if (tr.font) fchar.font = tr.font;
+    if (tr.stretchInPlace !== undefined) {
+        fchar.stretchInPlace = tr.stretchInPlace;
+    }
+    if (tr.shader !== undefined) fchar.shader = tr.shader;
+    if (tr.uniform !== undefined) fchar.uniform = tr.uniform;
+    if (typeof tr.skew === "number") tr.skew = vec2(-tr.skew, 0);
+    if (tr.override) {
+        Object.assign(fchar, tr);
+        return;
+    }
     if (tr.pos) fchar.pos = fchar.pos.add(tr.pos);
     if (tr.scale) fchar.scale = fchar.scale.scale(vec2(tr.scale));
+    if (tr.skew) fchar.skew = fchar.skew.add(vec2(tr.skew));
     if (tr.angle) fchar.angle += tr.angle;
     if (tr.color && fchar.ch.length === 1) {
         fchar.color = fchar.color.mult(tr.color);
@@ -39,73 +56,238 @@ function applyCharTransform(fchar: FormattedChar, tr: CharTransform) {
     if (tr.opacity != null) fchar.opacity *= tr.opacity;
 }
 
-export function compileStyledText(text: string): {
-    charStyleMap: Record<number, string[]>;
-    text: string;
-} {
-    const charStyleMap = {} as Record<number, string[]>;
+export function compileStyledText(txt: any): StyledTextInfo {
+    const charStyleMap = {} as Record<number, [string, string][]>;
     let renderText = "";
-    let styleStack: [string, number][] = [];
-    let lastIndex = 0;
-    let skipCount = 0;
+    let styleStack: [string, string][] = [];
+    let text = String(txt);
 
-    for (let i = 0; i < text.length; i++) {
-        if (i !== lastIndex + 1) skipCount += i - lastIndex;
-        lastIndex = i;
+    const emit = (ch: string) => {
+        if (styleStack.length > 0) {
+            charStyleMap[renderText.length] = styleStack.slice();
+        }
+        renderText += ch;
+    };
 
-        if (text[i] === "\\" && text[i + 1] === "[") continue;
-
-        if ((i === 0 || text[i - 1] !== "\\") && text[i] === "[") {
-            const start = i;
-
-            i++;
-
-            let isClosing = text[i] === "/";
-            let style = "";
-
-            if (isClosing) i++;
-
-            while (i < text.length && text[i] !== "]") {
-                style += text[i++];
+    while (text !== "") {
+        if (text[0] === "\\") {
+            if (text.length === 1) {
+                throw new Error("Styled text error: \\ at end of string");
             }
-
-            if (
-                !MULTI_WORD_RE.test(style)
-                || i >= text.length
-                || text[i] !== "]"
-                || (isClosing
-                    && (styleStack.length === 0
-                        || styleStack[styleStack.length - 1][0] !== style))
-            ) {
-                i = start;
-            }
-            else {
-                if (!isClosing) styleStack.push([style, start]);
-                else styleStack.pop();
-
+            emit(text[1]);
+            text = text.slice(2);
+            continue;
+        }
+        if (text[0] === "[") {
+            const execResult = /^\[(\/)?(\w+?)(?:=(.+?))?\]/.exec(text);
+            if (!execResult) {
+                // xxx: should throw an error here?
+                emit(text[0]);
+                text = text.slice(1);
                 continue;
             }
+            const [m, endSlash, theTagName, tagParam] = execResult;
+            if (endSlash !== undefined) {
+                if (tagParam) {
+                    throw new Error(
+                        `Styled text error: cannot use param in close tag [/${theTagName}]`,
+                    );
+                }
+                if (styleStack.length === 0) {
+                    throw new Error(
+                        `Styled text error: stray end tag [/${theTagName}]`,
+                    );
+                }
+                const [expectedTagName, arg] = styleStack.pop()!;
+                if (expectedTagName !== theTagName) {
+                    throw new Error(
+                        `Styled text error: mismatched tags. Expected [/${expectedTagName}], got [/${theTagName}]`,
+                    );
+                }
+            }
+            else styleStack.push([theTagName, tagParam]);
+            text = text.slice(m.length);
+            continue;
         }
-
-        renderText += text[i];
-        if (styleStack.length > 0) {
-            charStyleMap[i - skipCount] = styleStack.map(([name]) => name);
-        }
+        emit(text[0]);
+        text = text.slice(1);
     }
 
     if (styleStack.length > 0) {
-        while (styleStack.length > 0) {
-            const [_, start] = styleStack.pop()!;
-            text = text.substring(0, start) + "\\" + text.substring(start);
-        }
-
-        return compileStyledText(text);
+        throw new Error(
+            `Styled text error: unclosed tags ${styleStack.join(", ")}`,
+        );
     }
 
     return {
-        charStyleMap: charStyleMap,
+        charStyleMap,
         text: renderText,
     };
+}
+
+function applyTransform(
+    transform: DrawTextOpt["transform"],
+    fchar: FormattedChar,
+) {
+    if (!transform) return;
+
+    const tr = typeof transform === "function"
+        ? transform(fchar.textCursor, fchar.ch, "")
+        : transform;
+    if (tr) applyCharTransform(fchar, tr);
+}
+
+function applyStyles(
+    stylesOpt: DrawTextOpt["styles"],
+    fchar: FormattedChar,
+) {
+    for (const [name, param] of fchar.styles) {
+        const style = stylesOpt?.[name];
+
+        const tr = typeof style === "function"
+            ? style(fchar.textCursor, fchar.ch, param)
+            : style;
+
+        if (tr) applyCharTransform(fchar, tr);
+    }
+}
+
+export function transformFormattedText(
+    formattedText: FormattedText,
+    opt: DrawTextOpt,
+    reformatOnStretch = false,
+): FormattedText {
+    const opacity = opt.opacity ?? 1;
+    const color = opt.color ?? Color.WHITE;
+
+    for (const fchar of formattedText.chars) {
+        fchar.pos.set(fchar.initPos.x, fchar.initPos.y);
+        fchar.opacity = opacity;
+        fchar.color = color;
+        fchar.scale.set(fchar.initScale.x, fchar.initScale.y);
+        fchar.skew.set(0, 0);
+        fchar.angle = 0;
+
+        applyTransform(opt.transform, fchar);
+        applyStyles(opt.styles, fchar);
+
+        if (reformatOnStretch && !fchar.stretchInPlace) {
+            return formatText(opt);
+        }
+    }
+
+    return formattedText;
+}
+
+function getFontName(font: FontData | string): string {
+    return font instanceof FontData
+        ? font.fontface.family
+        : font;
+}
+
+function getFontAtlasForFont(font: FontData | string): FontAtlas {
+    const fontName = getFontName(font);
+    let atlas = _k.gfx.fontAtlases[fontName];
+    if (!atlas) {
+        // create a new atlas
+        const f = font instanceof FontData ? font : null;
+        _k.gfx.fontAtlases[fontName] = atlas = {
+            font: {
+                map: {},
+                size: f?.size ?? DEF_TEXT_CACHE_SIZE,
+                filter: f?.filter ?? _k.globalOpt.fontFilter ?? "linear",
+            },
+            maxHeight: 0,
+            ascent: 0,
+            descent: 0,
+            lineHeight: 0,
+            outline: f?.outline ?? null,
+        };
+    }
+    return atlas;
+}
+
+const allChars = (() => {
+    const renderableChars: string[] = [];
+    for (let i = 33; i <= 126; i++) { // ASCII printables, excluding space which is often ridiculously tall
+        renderableChars.push(String.fromCharCode(i));
+    }
+    return renderableChars.join("") + "ÅÁÂÄÃĄ"; // extended support for tall accents
+})();
+
+function updateFontAtlas(font: FontData | string, ch: string) {
+    const atlas = getFontAtlasForFont(font);
+    const fontName = getFontName(font);
+    if (!atlas.font.map[ch]) {
+        const c2d = _k.fontCacheC2d;
+        if (!c2d) {
+            throw new Error(
+                "error generating font texture: _k.fontCacheC2d is null",
+            );
+        }
+
+        if (!_k.fontCacheCanvas) {
+            throw new Error(
+                "error generating font texture: _k.fontCacheCanvas is missing",
+            );
+        }
+
+        c2d.clearRect(
+            0,
+            0,
+            _k.fontCacheCanvas.width,
+            _k.fontCacheCanvas.height,
+        );
+
+        c2d.font = `${atlas.font.size}px ${fontName}, sans-serif`; // generic-family fallback stabilizes ascent of missing glyphs
+        c2d.textBaseline = "alphabetic"; // more accurate across browsers and easier to calculate baseline
+        c2d.textAlign = "left";
+        c2d.fillStyle = "#fff";
+
+        if (!atlas.lineHeight) {
+            const m = c2d.measureText(allChars);
+            const ascent = m.actualBoundingBoxAscent;
+            const descent = m.actualBoundingBoxDescent;
+            const safeOffset = 2;
+
+            atlas.ascent =
+                Math.ceil(ascent > 0 ? ascent : atlas.font.size * 0.78)
+                + safeOffset;
+            atlas.descent =
+                Math.ceil(descent > 0 ? descent : atlas.font.size * 0.22)
+                + safeOffset;
+            atlas.lineHeight = Math.ceil(atlas.ascent + atlas.descent);
+        }
+
+        let w = Math.ceil(c2d.measureText(ch).width);
+        if (!w) return;
+
+        let h = atlas.lineHeight;
+
+        const p = (atlas.outline?.width ?? 0)
+            * (_k.globalOpt.pixelDensity || 1);
+        const x = p;
+        const y = p + atlas.ascent;
+
+        w += p * 2;
+        h += p * 2;
+
+        if (atlas.outline?.width) {
+            c2d.lineJoin = "round";
+            c2d.lineWidth = atlas.outline.width * 2;
+            c2d.strokeStyle = rgb(atlas.outline?.color || 0).toHex();
+            c2d.strokeText(ch, x, y);
+        }
+
+        c2d.fillText(ch, x, y);
+
+        const img = c2d.getImageData(0, 0, w, h);
+
+        atlas.font.map[ch] = _k.assets.packer.add(img, atlas.font.filter);
+        _k.assets.packer.syncIfPending();
+
+        atlas.maxHeight = Math.max(atlas.maxHeight, h);
+    }
 }
 
 export function formatText(opt: DrawTextOpt): FormattedText {
@@ -127,135 +309,37 @@ export function formatText(opt: DrawTextOpt): FormattedText {
     }
 
     const { charStyleMap, text } = compileStyledText(opt.text + "");
-    const chars = runes(text);
+    const chars = runes(text, opt.locale);
 
-    // if it's not bitmap font, we draw it with 2d canvas or use cached image
-    if (font instanceof FontData || typeof font === "string") {
-        const fontName = font instanceof FontData
-            ? font.fontface.family
-            : font;
-        const opts: {
-            outline: Outline | null;
-            filter: TexFilter;
-        } = font instanceof FontData
-            ? {
-                outline: font.outline,
-                filter: font.filter,
-            }
-            : {
-                outline: null,
-                filter: DEF_FONT_FILTER,
-            };
+    const fontAtlas = font instanceof FontData || typeof font === "string"
+        ? (() => {
+            const atlas = getFontAtlasForFont(font);
+            if (atlas.maxHeight == 0) updateFontAtlas(font, chars[0]);
+            return atlas;
+        })()
+        : null;
+    const defGfxFont = fontAtlas ? fontAtlas.font : font as GfxFont;
 
-        // TODO: customizable font tex filter
-        const atlas: FontAtlas = fontAtlases[fontName] ?? {
-            font: {
-                tex: new Texture(gfx.ggl, FONT_ATLAS_WIDTH, FONT_ATLAS_HEIGHT, {
-                    filter: opts.filter,
-                }),
-                map: {},
-                size: DEF_TEXT_CACHE_SIZE,
-            },
-            cursor: new Vec2(0),
-            outline: opts.outline,
-        };
-
-        if (!fontAtlases[fontName]) {
-            fontAtlases[fontName] = atlas;
-        }
-
-        font = atlas.font;
-
-        for (const ch of chars) {
-            if (!atlas.font.map[ch]) {
-                // TODO: use assets.packer to pack font texture
-                const c2d = fontCacheC2d;
-                if (!c2d) throw new Error("fontCacheC2d is not defined.");
-
-                if (!fontCacheCanvas) {
-                    throw new Error("fontCacheCanvas is not defined.");
-                }
-
-                c2d.clearRect(
-                    0,
-                    0,
-                    fontCacheCanvas.width,
-                    fontCacheCanvas.height,
-                );
-                c2d.font = `${font.size}px ${fontName}`;
-                c2d.textBaseline = "top";
-                c2d.textAlign = "left";
-                c2d.fillStyle = "#ffffff";
-                const m = c2d.measureText(ch);
-                let w = Math.ceil(m.width);
-                if (!w) continue;
-                let h = m.fontBoundingBoxAscent + m.fontBoundingBoxDescent;
-
-                // TODO: Test if this works with the verification of width and color
-                if (
-                    atlas.outline && atlas.outline.width
-                    && atlas.outline.color
-                ) {
-                    c2d.lineJoin = "round";
-                    c2d.lineWidth = atlas.outline.width * 2;
-                    c2d.strokeStyle = atlas.outline.color.toHex();
-                    c2d.strokeText(
-                        ch,
-                        atlas.outline.width,
-                        atlas.outline.width,
-                    );
-
-                    w += atlas.outline.width * 2;
-                    h += atlas.outline.width * 3;
-                }
-
-                c2d.fillText(
-                    ch,
-                    atlas.outline?.width ?? 0,
-                    atlas.outline?.width ?? 0,
-                );
-
-                const img = c2d.getImageData(0, 0, w, h);
-
-                // if we are about to exceed the X axis of the texture, go to another line
-                if (atlas.cursor.x + w > FONT_ATLAS_WIDTH) {
-                    atlas.cursor.x = 0;
-                    atlas.cursor.y += h;
-                    if (atlas.cursor.y > FONT_ATLAS_HEIGHT) {
-                        // TODO: create another atlas
-                        throw new Error(
-                            "Font atlas exceeds character limit",
-                        );
-                    }
-                }
-
-                font.tex.update(img, atlas.cursor.x, atlas.cursor.y);
-                font.map[ch] = new Quad(
-                    atlas.cursor.x,
-                    atlas.cursor.y,
-                    w,
-                    h,
-                );
-                atlas.cursor.x += w;
-            }
-        }
-    }
-
-    const size = opt.size || font.size;
-    const scale = vec2(opt.scale ?? 1).scale(size / font.size);
+    const size = opt.size || defGfxFont.size;
+    const sizeScale = size / defGfxFont.size;
+    const scale = vec2(opt.scale ?? 1).scale(sizeScale);
     const lineSpacing = opt.lineSpacing ?? 0;
     const letterSpacing = opt.letterSpacing ?? 0;
+    const baselineCenterOffset = fontAtlas
+        ? Math.round((fontAtlas.maxHeight * sizeScale - size) / 2)
+        : 0;
+
     let curX: number = 0;
     let tw = 0;
-    let th = 0;
     const lines: Array<{
         width: number;
-        chars: FormattedChar[];
+        chars: { ch: FormattedChar; font: GfxFont }[];
     }> = [];
-    let curLine: FormattedChar[] = [];
+    let curLine: typeof lines[number]["chars"] = [];
     let cursor = 0;
     let lastSpace: number | null = null;
     let lastSpaceWidth: number = 0;
+    let paraIndentX: number | undefined = undefined;
 
     // TODO: word break
     while (cursor < chars.length) {
@@ -263,8 +347,6 @@ export function formatText(opt: DrawTextOpt): FormattedText {
 
         // always new line on '\n'
         if (ch === "\n") {
-            th += size + lineSpacing;
-
             lines.push({
                 width: curX - letterSpacing,
                 chars: curLine,
@@ -274,22 +356,84 @@ export function formatText(opt: DrawTextOpt): FormattedText {
             lastSpaceWidth = 0;
             curX = 0;
             curLine = [];
+            paraIndentX = undefined;
         }
         else {
-            let q = font.map[ch];
+            const defaultFontValue =
+                (font instanceof FontData || typeof font === "string")
+                    ? font
+                    : undefined;
+            type PartialBy<T, K extends keyof T> =
+                & Omit<T, K>
+                & Partial<Pick<T, K>>;
+            const theFChar: PartialBy<
+                FormattedChar,
+                "width" | "height" | "frame"
+            > = {
+                ch: ch,
+                initPos: vec2(curX, 0),
+                pos: vec2(curX, 0),
+                opacity: opt.opacity ?? 1,
+                color: opt.color ?? Color.WHITE,
+                initScale: vec2(scale),
+                scale: vec2(scale),
+                skew: vec2(0),
+                angle: 0,
+                font: defaultFontValue,
+                stretchInPlace: true,
+                textCursor: cursor,
+                styles: charStyleMap[cursor] ?? [],
+            };
+
+            applyTransform(opt.transform, theFChar as any);
+            applyStyles(
+                opt.styles,
+                theFChar as any,
+            );
+
+            const requestedFont = theFChar.font;
+            const resolvedFont = resolveFont(requestedFont);
+            if (resolvedFont instanceof Asset || !resolvedFont) {
+                // abort, not all fonts have loaded yet
+                return {
+                    width: 0,
+                    height: 0,
+                    chars: [],
+                    opt: opt,
+                    renderedText: "",
+                };
+            }
+            let requestedFontData = defGfxFont;
+            let requestedFontScale = 1;
+            if (requestedFont && requestedFont !== defaultFontValue) {
+                if (
+                    resolvedFont instanceof FontData
+                    || typeof resolvedFont === "string"
+                ) {
+                    requestedFontData = getFontAtlasForFont(requestedFont).font;
+                }
+                else requestedFontData = resolvedFont;
+                requestedFontScale = defGfxFont.size / requestedFontData.size;
+            }
+            if (
+                requestedFont
+                && (resolvedFont instanceof FontData
+                    || typeof resolvedFont === "string")
+            ) updateFontAtlas(requestedFont, ch);
+
+            let f = theFChar.frame = requestedFontData.map[ch];
 
             // TODO: leave space if character not found?
-            if (q) {
-                let gw = q.w * scale.x;
+            if (f) {
+                let charWidth = f.q.w * f.tex.width * requestedFontScale
+                    * (theFChar.stretchInPlace
+                        ? scale
+                        : theFChar.scale).x;
 
-                if (opt.width && curX + gw > opt.width) {
+                if (opt.width && curX + charWidth > opt.width && curX > 0) {
                     // new line on last word if width exceeds
-                    th += size + lineSpacing;
                     if (lastSpace != null) {
                         cursor -= curLine.length - lastSpace;
-                        ch = chars[cursor];
-                        q = font.map[ch];
-                        gw = q.w * scale.x;
                         // omit trailing space
                         curLine = curLine.slice(0, lastSpace - 1);
                         curX = lastSpaceWidth;
@@ -302,36 +446,38 @@ export function formatText(opt: DrawTextOpt): FormattedText {
                         chars: curLine,
                     });
 
-                    curX = 0;
+                    curX = paraIndentX ?? 0;
                     curLine = [];
+                    continue;
                 }
 
-                // push char
+                theFChar.width = f.q.w * f.tex.width * requestedFontScale;
+                theFChar.height = f.q.h * f.tex.height * requestedFontScale;
+
+                theFChar.pos = theFChar.pos.add(
+                    charWidth * 0.5,
+                    theFChar.height * theFChar.scale.y * 0.5,
+                );
+
+                // queue char to be drawn
                 curLine.push({
-                    tex: font.tex,
-                    width: q.w,
-                    height: q.h,
-                    // without some padding there'll be visual artifacts on edges
-                    quad: new Quad(
-                        q.x / font.tex.width,
-                        q.y / font.tex.height,
-                        q.w / font.tex.width,
-                        q.h / font.tex.height,
-                    ),
-                    ch: ch,
-                    pos: new Vec2(curX, th),
-                    opacity: opt.opacity ?? 1,
-                    color: opt.color ?? Color.WHITE,
-                    scale: vec2(scale),
-                    angle: 0,
+                    ch: theFChar as FormattedChar,
+                    font: requestedFontData,
                 });
 
                 if (ch === " ") {
                     lastSpace = curLine.length;
                     lastSpaceWidth = curX;
                 }
+                if (
+                    opt.indentAll
+                    && paraIndentX === undefined
+                    && /\S/.test(ch)
+                ) {
+                    paraIndentX = curX;
+                }
 
-                curX += gw;
+                curX += charWidth;
                 tw = Math.max(tw, curX);
                 curX += letterSpacing;
             }
@@ -345,58 +491,35 @@ export function formatText(opt: DrawTextOpt): FormattedText {
         chars: curLine,
     });
 
-    th += size;
-
     if (opt.width) {
         tw = opt.width;
     }
 
-    const fchars: FormattedChar[] = [];
+    const formattedChars: FormattedChar[] = [];
+
+    let th = 0;
 
     for (let i = 0; i < lines.length; i++) {
+        if (i > 0) th += lineSpacing;
         const ox = (tw - lines[i].width) * alignPt(opt.align ?? "left");
-
-        for (const fchar of lines[i].chars) {
-            const q = font.map[fchar.ch];
-            const idx = fchars.length + i;
-
-            fchar.pos = fchar.pos.add(ox, 0).add(
-                q.w * scale.x * 0.5,
-                q.h * scale.y * 0.5,
+        let thisLineHeight = size;
+        for (const { ch } of lines[i].chars) {
+            ch.pos = ch.pos.add(ox, th - baselineCenterOffset);
+            ch.initPos = ch.pos;
+            formattedChars.push(ch);
+            thisLineHeight = Math.max(
+                thisLineHeight,
+                size * (ch.stretchInPlace ? scale : ch.scale).y / scale.y,
             );
-
-            if (opt.transform) {
-                const tr = typeof opt.transform === "function"
-                    ? opt.transform(idx, fchar.ch)
-                    : opt.transform;
-                if (tr) {
-                    applyCharTransform(fchar, tr);
-                }
-            }
-
-            if (charStyleMap[idx]) {
-                const styles = charStyleMap[idx];
-                for (const name of styles) {
-                    const style = opt.styles?.[name];
-                    const tr = typeof style === "function"
-                        ? style(idx, fchar.ch)
-                        : style;
-
-                    if (tr) {
-                        applyCharTransform(fchar, tr);
-                    }
-                }
-            }
-
-            fchars.push(fchar);
         }
+        th += thisLineHeight;
     }
 
     return {
         width: tw,
         height: th,
-        chars: fchars,
-        opt: opt,
+        chars: formattedChars,
+        opt,
         renderedText: text,
     };
 }

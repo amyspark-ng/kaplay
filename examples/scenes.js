@@ -1,4 +1,12 @@
-// @ts-check
+/**
+ * @file Scenes
+ * @description How to use scene system
+ * @difficulty 0
+ * @tags basics
+ * @minver 3001.0
+ * @category basics
+ * @test
+ */
 
 // Extend our game with multiple scenes
 
@@ -12,8 +20,8 @@ loadSprite("spike", "/sprites/spike.png");
 loadSprite("grass", "/sprites/grass.png");
 loadSprite("ghosty", "/sprites/ghosty.png");
 loadSprite("portal", "/sprites/portal.png");
-loadSound("score", "/examples/sounds/score.mp3");
-loadSound("portal", "/examples/sounds/portal.mp3");
+loadSound("score", "/sounds/score.mp3");
+loadSound("portal", "/sounds/portal.mp3");
 
 setGravity(2400);
 
@@ -55,19 +63,19 @@ scene("game", ({ levelIdx, score }) => {
             ],
             "$": () => [
                 sprite("coin"),
-                area(),
+                area({ isSensor: true }),
                 anchor("bot"),
                 "coin",
             ],
             "^": () => [
                 sprite("spike"),
-                area(),
+                area({ isSensor: true }),
                 anchor("bot"),
                 "danger",
             ],
             ">": () => [
                 sprite("portal"),
-                area(),
+                area({ isSensor: true }),
                 anchor("bot"),
                 "portal",
             ],

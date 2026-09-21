@@ -1,10 +1,20 @@
-// @ts-check
+/**
+ * @file Draw
+ * @description How to use the drawing API
+ * @difficulty 0
+ * @tags basics
+ * @minver 3001.0
+ * @category basics
+ * @test
+ */
 
-// Kaboom as pure rendering lib (no component / game obj etc.)
+// This example shows how to use the drawing API.
 
 kaplay();
+
 loadSprite("bean", "/sprites/bean.png");
 
+// Loads a spiral shader
 loadShader(
     "spiral",
     null,
@@ -32,7 +42,7 @@ const trail = [];
 const outline = {
     width: 4,
     color: rgb(0, 0, 0),
-    join: "miter",
+    join: "bevel",
 };
 
 function drawStuff() {
@@ -45,7 +55,7 @@ function drawStuff() {
         pos: p(0, 0),
         angle: t(40),
         anchor: "center",
-        scale: w(1, 1.5, 4),
+        scale: vec2(w(1, 1.5, 4)),
         color: rgb(w(128, 255, 4), w(128, 255, 8), 255),
     });
 

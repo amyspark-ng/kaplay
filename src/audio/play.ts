@@ -1,12 +1,15 @@
-import { Asset, resolveSound, type SoundData } from "../assets";
-import { assets, audio } from "../kaplay";
+import { Asset } from "../assets/asset";
+import { resolveSound, type SoundData } from "../assets/sound";
+import { KEvent, type KEventController } from "../events/events";
+import { _k } from "../shared";
 import type { MusicData } from "../types";
-import { KEvent, type KEventController } from "../utils";
 import { playMusic } from "./playMusic";
 
 // TODO: enable setting on load, make part of SoundData
 /**
  * Audio play configurations.
+ *
+ * @group Audio
  */
 export interface AudioPlayOpt {
     /**
@@ -40,6 +43,12 @@ export interface AudioPlayOpt {
      */
     detune?: number;
     /**
+     * Wheter to reverse the sound, so it plays from finish to start, this doesn't affect time().
+     *
+     * @since v4000.0
+     */
+    reverse?: boolean;
+    /**
      * The start time, in seconds.
      */
     seek?: number;
@@ -53,9 +62,12 @@ export interface AudioPlayOpt {
      * If the audio node should start out connected to another audio node rather than
      * KAPLAY's default volume node. Defaults to undefined, i.e. use KAPLAY's volume node.
      */
-    connectTo?: AudioNode
+    connectTo?: AudioNode;
 }
 
+/**
+ * @group Audio
+ */
 export interface AudioPlay {
     /**
      * Start playing audio.
@@ -144,11 +156,11 @@ export function play(
         | Asset<MusicData>,
     opt: AudioPlayOpt = {},
 ): AudioPlay {
-    if (typeof src === "string" && assets.music[src]) {
-        return playMusic(assets.music[src], opt);
+    if (typeof src === "string" && _k.assets.music[src]) {
+        return playMusic(_k.assets.music[src], opt);
     }
 
-    const ctx = audio.ctx;
+    const ctx = _k.audio.ctx;
     let paused = opt.paused ?? false;
     let srcNode = ctx.createBufferSource();
     const onEndEvents = new KEvent();
@@ -173,11 +185,31 @@ export function play(
     };
     panNode.pan.value = opt.pan ?? 0;
     panNode.connect(gainNode);
-    gainNode.connect(opt.connectTo ?? audio.masterNode);
+    gainNode.connect(opt.connectTo ?? _k.audio.masterNode);
     gainNode.gain.value = opt.volume ?? 1;
 
     const start = (data: SoundData) => {
-        srcNode.buffer = data.buf;
+        if (opt.reverse) {
+            // Create a new empty buffer
+            const reversedBuffer = ctx.createBuffer(
+                data.buf.numberOfChannels,
+                data.buf.length,
+                data.buf.sampleRate,
+            );
+
+            // Loop through each channel and reverse the data
+            for (let i = 0; i < data.buf.numberOfChannels; i++) {
+                const originalData = data.buf.getChannelData(i);
+                const reversedData = reversedBuffer.getChannelData(i);
+
+                // Copy and reverse
+                reversedData.set(originalData.toReversed());
+            }
+
+            srcNode.buffer = reversedBuffer;
+        }
+        else srcNode.buffer = data.buf;
+
         if (!paused) {
             startTime = ctx.currentTime;
             srcNode.start(0, pos);
@@ -185,8 +217,10 @@ export function play(
         }
     };
 
-    // @ts-ignore
-    const snd = resolveSound(src);
+    const snd = resolveSound(
+        // @ts-expect-error Resolve Type Error
+        src,
+    );
 
     if (snd instanceof Asset) {
         snd.onLoad(start);
@@ -323,7 +357,7 @@ export function play(
 
         connect(node?: AudioNode) {
             gainNode.disconnect();
-            gainNode.connect(node ?? audio.masterNode);
+            gainNode.connect(node ?? _k.audio.masterNode);
         },
     };
 }

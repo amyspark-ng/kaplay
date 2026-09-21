@@ -1,4 +1,12 @@
-// @ts-check
+/**
+ * @file Out of Screen
+ * @description How to handle objects that are out of screen.
+ * @difficulty 1
+ * @tags comps
+ * @minver 3001.0
+ * @category concepts
+ * @test
+ */
 
 // detect if obj is out of screen
 
@@ -12,7 +20,7 @@ function handleout() {
         id: "handleout",
         require: ["pos"],
         update() {
-            const spos = this.screenPos();
+            const spos = this.screenPos;
             if (
                 spos.x < 0
                 || spos.x > width()
@@ -42,7 +50,7 @@ function shoot() {
 }
 
 onKeyPress("space", shoot);
-onClick(shoot);
+onMousePress(shoot);
 
 onUpdate("bean", (m) => {
     m.move(m.dir.scale(SPEED));

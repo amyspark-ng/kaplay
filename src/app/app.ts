@@ -1,174 +1,268 @@
-// everything related to canvas, game loop and input
+// App is everything related to canvas, game loop and input
 
 import type {
+    ChordedKey,
     Cursor,
+    GameObj,
     GamepadDef,
-    GamepadStick,
+    KAPLAYOpt,
     Key,
     KGamepad,
     KGamepadButton,
+    KGamepadStick,
     MouseButton,
+    Tag,
 } from "../types";
 
-import { map, Vec2, vec2 } from "../math/math";
-
+import { GP_MAP } from "../constants/general";
+import type {
+    AppEventMap,
+    GameObjEventNames,
+    GameObjEvents,
+} from "../events/eventMap";
+import { type KEventController, KEventHandler } from "../events/events";
+import { canvasToViewport } from "../gfx/viewport";
+import { map, vec2 } from "../math/math";
+import { Vec2 } from "../math/Vec2";
+import { _k } from "../shared";
+import { deprecateMsg } from "../utils/log";
+import { overload2 } from "../utils/overload";
+import { isEqOrIncludes, setHasOrIncludes } from "../utils/sets";
+import type { TupleWithoutFirst } from "../utils/types";
 import {
-    isEqOrIncludes,
-    KEventController,
-    KEventHandler,
-    overload2,
-    setHasOrIncludes,
-} from "../utils";
-
-import GAMEPAD_MAP from "../data/gamepad.json" assert { type: "json" };
+    getButton,
+    getButtons,
+    pressButton,
+    releaseButton,
+    setButton,
+} from "./buttons";
+import { detectGamepadType, resolveGamepadMap } from "./gamepadId";
 import {
-    type ButtonBinding,
+    ButtonProcessor,
     type ButtonsDef,
-    getLastInputDeviceType,
     parseButtonBindings,
 } from "./inputBindings";
 
-export class ButtonState<T = string> {
-    pressed: Set<T> = new Set([]);
-    pressedRepeat: Set<T> = new Set([]);
-    released: Set<T> = new Set([]);
-    down: Set<T> = new Set([]);
+export class ButtonState<T = string, A = never> {
+    pressed = new Set<T>();
+    pressedRepeat = new Set<T>();
+    released = new Set<T>();
+    down = new Set<T>();
+    constructor(
+        private _pressEv: keyof AppEventMap | null,
+        private _pressRepeatEv: keyof AppEventMap | null,
+        private _downEv: keyof AppEventMap | null,
+        private _releaseEv: keyof AppEventMap | null,
+        private _arg?: A,
+    ) {}
     update() {
         this.pressed.clear();
         this.released.clear();
         this.pressedRepeat.clear();
     }
-    press(btn: T) {
+    process(state: AppState) {
+        if (this._downEv !== null) {
+            this.down.forEach(b => {
+                state.events.trigger(this._downEv as any, b, this._arg);
+            });
+        }
+    }
+    press(btn: T, state: AppState) {
+        const had = this.pressed.has(btn);
         this.pressed.add(btn);
-        this.pressedRepeat.add(btn);
         this.down.add(btn);
+        if (!had && this._pressEv !== null) {
+            state.events.trigger(this._pressEv as any, btn, this._arg);
+        }
+        this.pressRepeat(btn, state);
     }
-    pressRepeat(btn: T) {
+    pressRepeat(btn: T, state: AppState) {
+        const had = this.pressedRepeat.has(btn);
         this.pressedRepeat.add(btn);
+        if (!had && this._pressRepeatEv !== null) {
+            state.events.trigger(this._pressRepeatEv as any, btn, this._arg);
+        }
     }
-    release(btn: T) {
+    release(btn: T, state: AppState) {
+        const had = this.released.has(btn);
         this.down.delete(btn);
         this.pressed.delete(btn);
         this.released.add(btn);
+        if (!had && this._releaseEv !== null) {
+            state.events.trigger(this._releaseEv as any, btn, this._arg);
+        }
+    }
+    releaseAll(state: AppState) {
+        for (const btn of this.down) {
+            this.release(btn, state);
+        }
     }
 }
 
 class GamepadState {
-    buttonState: ButtonState<KGamepadButton> = new ButtonState();
-    stickState: Map<GamepadStick, Vec2> = new Map();
+    // We allow null gamepad because one of these is used for the merged gamepad state which
+    // doesn't fire the events. since they have to include the gamepad as the arg we just let
+    // the individual gamepad states fire the events, and only collect the merged state here
+    // for the purposes of isGamepadButtonDown() etc.
+    constructor(gp: KGamepad | null) {
+        this.buttonState = new ButtonState(
+            gp && "gamepadButtonPress",
+            null,
+            gp && "gamepadButtonDown",
+            gp && "gamepadButtonRelease",
+            gp!,
+        );
+    }
+    buttonState: ButtonState<KGamepadButton, KGamepad>;
+    stickState: Map<KGamepadStick, Vec2> = new Map([
+        ["left", new Vec2(0)],
+        ["right", new Vec2(0)],
+    ]);
+    analogState = new Map<string, number>();
 }
 
 class FPSCounter {
-    private dts: number[] = [];
-    private timer: number = 0;
-    fps: number = 0;
+    /** Window size */
+    maxSamples = 10;
+    history = new Float64Array(this.maxSamples);
+    accumulator = 0;
+    i = 0;
+    fps = 0;
+    curNSamples = 0;
+    timer = 0;
+    autoRecalculateInterval = 1;
     tick(dt: number) {
-        this.dts.push(dt);
         this.timer += dt;
-        if (this.timer >= 1) {
+        this.accumulator += dt - this.history[this.i];
+        this.history[this.i] = dt;
+        this.i = (this.i + 1) % this.maxSamples;
+        this.curNSamples = Math.min(this.curNSamples + 1, this.maxSamples);
+        if (this.timer >= this.autoRecalculateInterval) {
+            this.calculate();
             this.timer = 0;
-            this.fps = Math.round(
-                1 / (this.dts.reduce((a, b) => a + b) / this.dts.length),
-            );
-            this.dts = [];
         }
+    }
+    calculate() {
+        return this.fps = this.curNSamples / this.accumulator;
+    }
+    ago(ago: number) {
+        return this.history.at(this.i - ago - 1);
+    }
+    resize(samples: number) {
+        this.history = new Float64Array(this.maxSamples = samples);
+        this.i = this.curNSamples = 0;
     }
 }
 
 export type App = ReturnType<typeof initApp>;
 export type AppState = ReturnType<typeof initAppState>;
 
-export let appState: AppState;
+/**
+ * The App method names that will have a helper in GameObjRaw
+ */
+export type AppEvents = keyof {
+    [K in keyof App as K extends `on${any}` ? K : never]: [never];
+};
 
+const fixedSpeeds = {
+    friedPotato: 10,
+    potato: 20,
+    snail: 25,
+    normal: 50,
+    lightspeed: 80,
+    ridiculous: 125,
+    ludicrous: 160,
+};
+
+export type FixedSpeedOption = keyof typeof fixedSpeeds;
+
+/**
+ * Create the App state object.
+ *
+ * @ignore
+ *
+ * @param opt - Options.
+ *
+ * @returns The app state.
+ */
 export const initAppState = (opt: {
     canvas: HTMLCanvasElement;
-    touchToMouse?: boolean;
-    gamepads?: Record<string, GamepadDef>;
-    pixelDensity?: number;
-    maxFPS?: number;
     buttons?: ButtonsDef;
+    fixedUpdateMode?: FixedSpeedOption;
+    maxTimeStep?: number;
 }) => {
     const buttons = opt.buttons ?? {};
-
     return {
         canvas: opt.canvas,
         buttons: buttons,
-        buttonsByKey: new Map<Key, string[]>(),
-        buttonsByMouse: new Map<MouseButton, string[]>(),
-        buttonsByGamepad: new Map<KGamepadButton, string[]>(),
-        buttonsByKeyCode: new Map<string, string[]>(),
+        buttonHandler: new ButtonProcessor(),
         loopID: null as null | number,
         stopped: false,
         dt: 0,
         fixedDt: 1 / 50,
+        maxStep: opt.maxTimeStep ?? 0.1,
         restDt: 0,
         time: 0,
         realTime: 0,
+        rawFPSCounter: new FPSCounter(),
         fpsCounter: new FPSCounter(),
         timeScale: 1,
         skipTime: false,
         isHidden: false,
         numFrames: 0,
+        capsOn: false,
         mousePos: new Vec2(0),
         mouseDeltaPos: new Vec2(0),
-        keyState: new ButtonState<Key>(),
-        mouseState: new ButtonState<MouseButton>(),
-        mergedGamepadState: new GamepadState(),
+        keyState: new ButtonState<Key>(
+            "keyPress",
+            "keyPressRepeat",
+            "keyDown",
+            "keyRelease",
+        ),
+        mouseState: new ButtonState<MouseButton>(
+            "mousePress",
+            null,
+            "mouseDown",
+            "mouseRelease",
+        ),
+        mergedGamepadState: new GamepadState(null),
         gamepadStates: new Map<number, GamepadState>(),
+        // resolved button map per gamepad index, computed once on connect
+        // rather than re-resolved from the raw id string every frame
+        gamepadMaps: new Map<number, GamepadDef>(),
         lastInputDevice: null as "mouse" | "keyboard" | "gamepad" | null,
         // unified input state
-        buttonState: new ButtonState<string>(),
         gamepads: [] as KGamepad[],
         charInputted: [] as string[],
         isMouseMoved: false,
         lastWidth: opt.canvas.offsetWidth,
         lastHeight: opt.canvas.offsetHeight,
-        events: new KEventHandler<{
-            mouseMove: [];
-            mouseDown: [MouseButton];
-            mousePress: [MouseButton];
-            mouseRelease: [MouseButton];
-            charInput: [string];
-            keyPress: [Key];
-            keyDown: [Key];
-            keyPressRepeat: [Key];
-            keyRelease: [Key];
-            touchStart: [Vec2, Touch];
-            touchMove: [Vec2, Touch];
-            touchEnd: [Vec2, Touch];
-            gamepadButtonDown: [KGamepadButton, KGamepad];
-            gamepadButtonPress: [KGamepadButton, KGamepad];
-            gamepadButtonRelease: [KGamepadButton, KGamepad];
-            gamepadStick: [string, Vec2, KGamepad];
-            gamepadConnect: [KGamepad];
-            gamepadDisconnect: [KGamepad];
-            buttonDown: [string];
-            buttonPress: [string];
-            buttonRelease: [string];
-            scroll: [Vec2];
-            hide: [];
-            show: [];
-            resize: [];
-            input: [];
-        }>(),
+        events: new KEventHandler<AppEventMap>(),
     };
 };
 
-export const initApp = (opt: {
-    canvas: HTMLCanvasElement;
-    touchToMouse?: boolean;
-    gamepads?: Record<string, GamepadDef>;
-    pixelDensity?: number;
-    maxFPS?: number;
-    buttons?: ButtonsDef;
-}) => {
+/**
+ * Create the App, the context, and handler for all things related to the game
+ * canvas, input, and DOM interaction.
+ *
+ * @ignore
+ *
+ * @param opt - Options.
+ *
+ * @returns The app context.
+ */
+export const initApp = (
+    opt: {
+        canvas: HTMLCanvasElement;
+    } & KAPLAYOpt,
+) => {
     if (!opt.canvas) {
         throw new Error("Please provide a canvas");
     }
 
     const state = initAppState(opt);
-    appState = state;
-    parseButtonBindings();
+    parseButtonBindings(state);
+    if (opt.fixedUpdateMode) setFixedSpeed(opt.fixedUpdateMode);
 
     function dt() {
         return state.dt * state.timeScale;
@@ -194,12 +288,25 @@ export const initApp = (opt: {
         return state.fpsCounter.fps;
     }
 
+    function rawFPS() {
+        return state.rawFPSCounter.fps;
+    }
+
     function numFrames() {
         return state.numFrames;
     }
 
     function screenshot(): string {
         return state.canvas.toDataURL();
+    }
+
+    function screenshotToBlob(): Promise<Blob> {
+        return new Promise<Blob>((resolve, reject) => {
+            state.canvas.toBlob(b => {
+                if (b !== null) resolve(b);
+                else reject(new Error("failed to make blob"));
+            });
+        });
     }
 
     function setCursor(c: Cursor): void {
@@ -215,7 +322,7 @@ export const initApp = (opt: {
             try {
                 const res = state.canvas
                     .requestPointerLock() as unknown as Promise<void>;
-                if (res.catch) {
+                if (res?.catch) {
                     res.catch((e) => console.error(e));
                 }
             } catch (e) {
@@ -259,6 +366,10 @@ export const initApp = (opt: {
             || document.webkitFullscreenElement === state.canvas;
     }
 
+    const isFocused = () => {
+        return document.activeElement === state.canvas;
+    };
+
     function quit() {
         state.stopped = true;
         const ce = Object.entries(canvasEvents);
@@ -277,6 +388,12 @@ export const initApp = (opt: {
         resizeObserver.disconnect();
     }
 
+    function setFixedSpeed(speed: FixedSpeedOption) {
+        const fps = fixedSpeeds[speed];
+        if (!fps) throw new Error("Unknown fixed speed " + speed);
+        state.fixedDt = 1 / fps;
+    }
+
     function run(
         fixedUpdate: () => void,
         update: (processInput: () => void, resetInput: () => void) => void,
@@ -285,10 +402,11 @@ export const initApp = (opt: {
             cancelAnimationFrame(state.loopID);
         }
 
-        let fixedAccumulatedDt = 0;
-        let accumulatedDt = 0;
+        let fixedUpdateAccumulator = 0;
+        let updateAccumulator = 0;
 
         const frame = (t: number) => {
+            state.loopID = null;
             if (state.stopped) return;
 
             // TODO: allow background actions?
@@ -297,37 +415,49 @@ export const initApp = (opt: {
                 return;
             }
 
-            const loopTime = t / 1000;
-            const realDt = Math.min(loopTime - state.realTime, 0.25);
-            const desiredDt = opt.maxFPS ? 1 / opt.maxFPS : 0;
+            const currentTime = t / 1000;
+            const unclampedDt = currentTime - state.realTime;
+            const observedDt = Math.min(unclampedDt, state.maxStep);
 
-            state.realTime = loopTime;
-            accumulatedDt += realDt;
+            state.rawFPSCounter.tick(unclampedDt);
+            state.realTime = currentTime;
 
-            if (accumulatedDt > desiredDt) {
-                if (!state.skipTime) {
-                    fixedAccumulatedDt += accumulatedDt;
+            if (state.skipTime) {
+                state.skipTime = false;
+            }
+            else {
+                updateAccumulator += observedDt;
+                fixedUpdateAccumulator += observedDt;
+
+                if (fixedUpdateAccumulator > state.fixedDt) {
                     state.dt = state.fixedDt;
                     state.restDt = 0;
-                    while (fixedAccumulatedDt > state.fixedDt) {
-                        fixedAccumulatedDt -= state.fixedDt;
-                        if (fixedAccumulatedDt < state.fixedDt) {
-                            state.restDt = fixedAccumulatedDt;
+                    while (fixedUpdateAccumulator > state.fixedDt) {
+                        fixedUpdateAccumulator -= state.fixedDt;
+                        if (fixedUpdateAccumulator < state.fixedDt) {
+                            state.restDt = fixedUpdateAccumulator;
                         }
                         fixedUpdate();
                     }
-                    state.restDt = fixedAccumulatedDt;
-                    state.dt = accumulatedDt;
-                    state.time += dt();
-                    state.fpsCounter.tick(state.dt);
                 }
-                accumulatedDt = 0;
-                state.skipTime = false;
-                state.numFrames++;
+                const desiredDt = opt.maxFPS ? 1 / opt.maxFPS : 0;
+                if (updateAccumulator > desiredDt) {
+                    state.time += state.dt = desiredDt > 0
+                        ? Math.max(desiredDt, observedDt)
+                        : observedDt;
+                    state.restDt = fixedUpdateAccumulator;
+                    state.fpsCounter.tick(state.dt);
+                    if (desiredDt > 0) {
+                        updateAccumulator -= desiredDt;
+                    }
+                    else {
+                        updateAccumulator = 0;
+                    }
+                    state.numFrames++;
 
-                update(processInput, resetInput);
+                    update(processInput, resetInput);
+                }
             }
-
             state.loopID = requestAnimationFrame(frame);
         };
 
@@ -416,33 +546,28 @@ export const initApp = (opt: {
             );
     }
 
+    function getGamepadAnalogButton(
+        btn: KGamepadButton,
+    ): number {
+        return state.mergedGamepadState.analogState.get(btn) ?? 0;
+    }
+
     function isButtonPressed(btn?: string | string[]): boolean {
         return btn === undefined
-            ? state.buttonState.pressed.size > 0
-            : setHasOrIncludes(state.buttonState.pressed, btn);
+            ? state.buttonHandler.state.pressed.size > 0
+            : setHasOrIncludes(state.buttonHandler.state.pressed, btn);
     }
 
     function isButtonDown(btn?: string | string[]): boolean {
         return btn === undefined
-            ? state.buttonState.down.size > 0
-            : setHasOrIncludes(state.buttonState.down, btn);
+            ? state.buttonHandler.state.down.size > 0
+            : setHasOrIncludes(state.buttonHandler.state.down, btn);
     }
 
     function isButtonReleased(btn?: string | string[]): boolean {
         return btn === undefined
-            ? state.buttonState.released.size > 0
-            : setHasOrIncludes(state.buttonState.released, btn);
-    }
-
-    function getButton(btn: string): ButtonBinding {
-        return state.buttons?.[btn];
-    }
-
-    function setButton(btn: string, binding: ButtonBinding) {
-        state.buttons[btn] = {
-            ...state.buttons[btn],
-            ...binding,
-        };
+            ? state.buttonHandler.state.released.size > 0
+            : setHasOrIncludes(state.buttonHandler.state.released, btn);
     }
 
     function onResize(action: () => void): KEventController {
@@ -548,10 +673,20 @@ export const initApp = (opt: {
     }
 
     function onHide(action: () => void): KEventController {
-        return state.events.on("hide", action);
+        deprecateMsg("onHide", "onTabHide");
+        return onTabHide(action);
     }
 
     function onShow(action: () => void): KEventController {
+        deprecateMsg("onShow", "onTabShow");
+        return onTabShow(action);
+    }
+
+    function onTabHide(action: () => void): KEventController {
+        return state.events.on("show", action);
+    }
+
+    function onTabShow(action: () => void): KEventController {
         return state.events.on("show", action);
     }
 
@@ -610,7 +745,7 @@ export const initApp = (opt: {
     );
 
     function onGamepadStick(
-        stick: GamepadStick,
+        stick: KGamepadStick,
         action: (value: Vec2, gp: KGamepad) => void,
     ): KEventController {
         return state.events.on(
@@ -620,14 +755,14 @@ export const initApp = (opt: {
     }
 
     function onGamepadConnect(action: (gamepad: KGamepad) => void) {
-        state.events.on("gamepadConnect", action);
+        return state.events.on("gamepadConnect", action);
     }
 
     function onGamepadDisconnect(action: (gamepad: KGamepad) => void) {
-        state.events.on("gamepadDisconnect", action);
+        return state.events.on("gamepadDisconnect", action);
     }
 
-    function getGamepadStick(stick: GamepadStick): Vec2 {
+    function getGamepadStick(stick: KGamepadStick): Vec2 {
         return state.mergedGamepadState.stickState.get(stick) || new Vec2(0);
     }
 
@@ -666,31 +801,29 @@ export const initApp = (opt: {
         );
     });
 
+    const getLastInputDeviceType = () => {
+        return state.lastInputDevice;
+    };
+
     function processInput() {
         state.events.trigger("input");
-        state.keyState.down.forEach((k) => state.events.trigger("keyDown", k));
-        state.mouseState.down.forEach((k) =>
-            state.events.trigger("mouseDown", k)
-        );
-
-        state.buttonState.down.forEach((btn) => {
-            const gamepadBindings = getButton(btn)?.gamepad;
-            if (gamepadBindings && isGamepadButtonDown(gamepadBindings)) return;
-
-            state.events.trigger("buttonDown", btn);
-        });
-
         processGamepad();
+        state.keyState.process(state);
+        state.mouseState.process(state);
+        state.buttonHandler.process(state);
     }
 
     function resetInput() {
         state.keyState.update();
         state.mouseState.update();
-        state.buttonState.update();
+        state.buttonHandler.update();
 
         state.mergedGamepadState.buttonState.update();
         state.mergedGamepadState.stickState.forEach((v, k) => {
             state.mergedGamepadState.stickState.set(k, new Vec2(0));
+        });
+        state.mergedGamepadState.analogState.forEach((v, k) => {
+            state.mergedGamepadState.analogState.set(k, 0);
         });
 
         state.charInputted = [];
@@ -702,12 +835,27 @@ export const initApp = (opt: {
             s.stickState.forEach((v, k) => {
                 s.stickState.set(k, new Vec2(0));
             });
+            s.analogState.forEach((v, k) => {
+                s.analogState.set(k, 0);
+            });
         });
     }
 
     function registerGamepad(browserGamepad: Gamepad) {
+        // Custom maps (opt.gamepads) stay keyed by literal id for backwards
+        // compatibility; see gamepadId.ts for the vendor:product resolution.
+        const gamepadResolution = resolveGamepadMap(
+            browserGamepad.id,
+            GP_MAP,
+            opt.gamepads,
+        );
+        const { map: gamepadMap, name } = gamepadResolution;
+        const type = detectGamepadType(gamepadResolution);
+
         const gamepad: KGamepad = {
             index: browserGamepad.index,
+            name,
+            type,
             isPressed: (btn: KGamepadButton) => {
                 return state.gamepadStates.get(browserGamepad.index)
                     ?.buttonState
@@ -723,21 +871,23 @@ export const initApp = (opt: {
                     ?.buttonState
                     .released.has(btn) || false;
             },
-            getStick: (stick: GamepadStick) => {
+            getStick: (stick: KGamepadStick) => {
                 return state.gamepadStates.get(browserGamepad.index)?.stickState
                     .get(stick) || vec2();
+            },
+            getAnalog: (button: KGamepadButton) => {
+                return state.gamepadStates.get(browserGamepad.index)
+                    ?.analogState.get(button) ?? 0;
             },
         };
 
         state.gamepads.push(gamepad);
 
-        state.gamepadStates.set(browserGamepad.index, {
-            buttonState: new ButtonState(),
-            stickState: new Map([
-                ["left", new Vec2(0)],
-                ["right", new Vec2(0)],
-            ]),
-        });
+        state.gamepadStates.set(
+            browserGamepad.index,
+            new GamepadState(gamepad),
+        );
+        state.gamepadMaps.set(browserGamepad.index, gamepadMap);
 
         return gamepad;
     }
@@ -747,6 +897,7 @@ export const initApp = (opt: {
             g.index !== gamepad.index
         );
         state.gamepadStates.delete(gamepad.index);
+        state.gamepadMaps.delete(gamepad.index);
     }
 
     // TODO: Clean up this function
@@ -764,91 +915,67 @@ export const initApp = (opt: {
         for (const gamepad of state.gamepads) {
             const browserGamepad = navigator.getGamepads()[gamepad.index];
             if (!browserGamepad) continue;
-            const customMap = opt.gamepads ?? {};
-            const map = customMap[browserGamepad.id]
-                ?? (GAMEPAD_MAP as Record<any, GamepadDef>)[browserGamepad.id]
-                ?? GAMEPAD_MAP["default"];
+
+            const map = state.gamepadMaps.get(gamepad.index)
+                ?? GP_MAP["default"];
             const gamepadState = state.gamepadStates.get(gamepad.index);
             if (!gamepadState) continue;
 
             for (let i = 0; i < browserGamepad.buttons.length; i++) {
                 const gamepadBtn = map.buttons[i];
                 const browserGamepadBtn = browserGamepad.buttons[i];
-                const isGamepadButtonBind = state.buttonsByGamepad.has(
+
+                gamepadState.analogState.set(
                     gamepadBtn,
+                    browserGamepadBtn.value,
+                );
+                state.mergedGamepadState.analogState.set(
+                    gamepadBtn,
+                    browserGamepadBtn.value,
                 );
 
                 if (browserGamepadBtn.pressed) {
-                    if (!gamepadState.buttonState.down.has(gamepadBtn)) {
-                        state.lastInputDevice = "gamepad";
-
-                        if (isGamepadButtonBind) {
-                            // replicate input in merged state, defined button state and gamepad state
-                            state.buttonsByGamepad.get(gamepadBtn)?.forEach(
-                                (btn) => {
-                                    state.buttonState.press(btn);
-                                    state.events.trigger("buttonPress", btn);
-                                },
-                            );
-                        }
-
-                        state.mergedGamepadState.buttonState.press(gamepadBtn);
-                        gamepadState.buttonState.press(gamepadBtn);
-                        state.events.trigger(
-                            "gamepadButtonPress",
-                            gamepadBtn,
-                            gamepad,
-                        );
+                    if (gamepadState.buttonState.down.has(gamepadBtn)) {
+                        gamepadState.buttonState.process(state);
+                        continue;
                     }
 
-                    if (isGamepadButtonBind) {
-                        state.buttonsByGamepad.get(gamepadBtn)?.forEach(
-                            (btn) => {
-                                state.buttonState.press(btn);
-                                state.events.trigger("buttonDown", btn);
-                            },
-                        );
-                    }
-
-                    state.events.trigger(
-                        "gamepadButtonDown",
+                    state.lastInputDevice = "gamepad";
+                    state.buttonHandler.processGamepadButtonDown(
                         gamepadBtn,
-                        gamepad,
+                        state,
                     );
+
+                    state.mergedGamepadState.buttonState.press(
+                        gamepadBtn,
+                        state,
+                    );
+                    gamepadState.buttonState.press(gamepadBtn, state);
                 }
                 else if (gamepadState.buttonState.down.has(gamepadBtn)) {
-                    if (isGamepadButtonBind) {
-                        state.buttonsByGamepad.get(gamepadBtn)?.forEach(
-                            (btn) => {
-                                state.buttonState.release(btn);
-                                state.events.trigger("buttonRelease", btn);
-                            },
-                        );
-                    }
+                    state.buttonHandler.processGamepadButtonUp(
+                        gamepadBtn,
+                        state,
+                    );
 
                     state.mergedGamepadState.buttonState.release(
                         gamepadBtn,
+                        state,
                     );
-                    gamepadState.buttonState.release(gamepadBtn);
-
-                    state.events.trigger(
-                        "gamepadButtonRelease",
-                        gamepadBtn,
-                        gamepad,
-                    );
+                    gamepadState.buttonState.release(gamepadBtn, state);
                 }
             }
 
             for (const stickName in map.sticks) {
-                const stick = map.sticks[stickName as GamepadStick];
+                const stick = map.sticks[stickName as KGamepadStick];
                 if (!stick) continue;
                 const value = new Vec2(
                     browserGamepad.axes[stick.x],
                     browserGamepad.axes[stick.y],
                 );
-                gamepadState.stickState.set(stickName as GamepadStick, value);
+                gamepadState.stickState.set(stickName as KGamepadStick, value);
                 state.mergedGamepadState.stickState.set(
-                    stickName as GamepadStick,
+                    stickName as KGamepadStick,
                     value,
                 );
                 state.events.trigger("gamepadStick", stickName, value, gamepad);
@@ -864,37 +991,43 @@ export const initApp = (opt: {
     const docEvents: EventList<DocumentEventMap> = {};
     const winEvents: EventList<WindowEventMap> = {};
 
-    const pd = opt.pixelDensity || 1;
+    let releaseHeldInputsQueued = false;
+
+    function releaseHeldInputs() {
+        state.buttonHandler.releaseKeyboardMouse(state);
+        state.keyState.releaseAll(state);
+        state.mouseState.releaseAll(state);
+    }
+
+    function queueReleaseHeldInputs() {
+        if (releaseHeldInputsQueued) {
+            return;
+        }
+        releaseHeldInputsQueued = true;
+        state.events.onOnce("input", () => {
+            releaseHeldInputsQueued = false;
+            releaseHeldInputs();
+        });
+    }
+
+    function releaseHeldInputsOnFocusLoss() {
+        // Release all inputs immediately when blur/hide happens,
+        // and then queue it to to catch any queued events on the next input tick,
+        // that wouldn't be processed otherwise
+        releaseHeldInputs();
+        queueReleaseHeldInputs();
+    }
+
+    canvasEvents.blur = () => {
+        releaseHeldInputsOnFocusLoss();
+    };
 
     canvasEvents.mousemove = (e) => {
-        const mousePos = new Vec2(e.offsetX, e.offsetY);
-        const mouseDeltaPos = new Vec2(e.movementX, e.movementY);
-
-        if (isFullscreen()) {
-            const cw = state.canvas.width / pd;
-            const ch = state.canvas.height / pd;
-            const ww = window.innerWidth;
-            const wh = window.innerHeight;
-            const rw = ww / wh;
-            const rc = cw / ch;
-            if (rw > rc) {
-                const ratio = wh / ch;
-                const offset = (ww - (cw * ratio)) / 2;
-                mousePos.x = map(e.offsetX - offset, 0, cw * ratio, 0, cw);
-                mousePos.y = map(e.offsetY, 0, ch * ratio, 0, ch);
-            }
-            else {
-                const ratio = ww / cw;
-                const offset = (wh - (ch * ratio)) / 2;
-                mousePos.x = map(e.offsetX, 0, cw * ratio, 0, cw);
-                mousePos.y = map(e.offsetY - offset, 0, ch * ratio, 0, ch);
-            }
-        }
-
+        state.lastInputDevice = "mouse";
         state.events.onOnce("input", () => {
             state.isMouseMoved = true;
-            state.mousePos = mousePos;
-            state.mouseDeltaPos = mouseDeltaPos;
+            state.mousePos = canvasToViewport(e.offsetX, e.offsetY);
+            state.mouseDeltaPos.set(e.movementX, e.movementY);
             state.events.trigger("mouseMove");
         });
     };
@@ -913,16 +1046,8 @@ export const initApp = (opt: {
             if (!m) return;
 
             state.lastInputDevice = "mouse";
-
-            if (state.buttonsByMouse.has(m)) {
-                state.buttonsByMouse.get(m)?.forEach((btn) => {
-                    state.buttonState.press(btn);
-                    state.events.trigger("buttonPress", btn);
-                });
-            }
-
-            state.mouseState.press(m);
-            state.events.trigger("mousePress", m);
+            state.buttonHandler.processMousedown(m, state);
+            state.mouseState.press(m, state);
         });
     };
 
@@ -931,29 +1056,21 @@ export const initApp = (opt: {
             const m = MOUSE_BUTTONS[e.button];
             if (!m) return;
 
-            if (state.buttonsByMouse.has(m)) {
-                state.buttonsByMouse.get(m)?.forEach((btn) => {
-                    state.buttonState.release(btn);
-                    state.events.trigger("buttonRelease", btn);
-                });
-            }
-
-            state.mouseState.release(m);
-            state.events.trigger("mouseRelease", m);
+            state.buttonHandler.processMouseup(m, state);
+            state.mouseState.release(m, state);
         });
     };
 
-    const PREVENT_DEFAULT_KEYS = new Set([
-        " ",
-        "ArrowLeft",
-        "ArrowRight",
-        "ArrowUp",
-        "ArrowDown",
-        "Tab",
-    ]);
+    canvasEvents.pointerdown = (e) => {
+        state.canvas.setPointerCapture(e.pointerId);
+    };
 
-    // translate these key names to a simpler version
-    const KEY_ALIAS = {
+    canvasEvents.pointerup = (e) => {
+        state.canvas.releasePointerCapture(e.pointerId);
+    };
+
+    // translate key names to kaplay keys
+    const KEY_ALIAS: Record<KeyboardEvent["key"], Key> = {
         "ArrowLeft": "left",
         "ArrowRight": "right",
         "ArrowUp": "up",
@@ -961,13 +1078,61 @@ export const initApp = (opt: {
         " ": "space",
     };
 
+    const PREVENT_DEFAULT_KEYS = new Set<Key>([
+        "left",
+        "right",
+        "up",
+        "down",
+        "space",
+        "tab",
+        "/",
+        ...(opt.debug !== false
+            ? [
+                opt.debugKey || "f1",
+                "f2",
+                "f7",
+                "f8",
+                "f9",
+                "f10",
+            ]
+            : []),
+    ]);
+
+    const shouldPreventButtons = (key: Key, by: "byKey" | "byKeyCode") => {
+        const committer = state.buttonHandler[by].committers.get(key);
+        if (!committer) return false;
+
+        btns: for (const mods of committer.btns.values()) {
+            for (const mod of committer.check) {
+                if (
+                    (state.keyState.down.has(mod) || mod === key)
+                        !== mods.includes(mod)
+                ) {
+                    continue btns;
+                }
+            }
+            return true;
+        }
+
+        return false;
+    };
+
     canvasEvents.keydown = (e) => {
-        if (PREVENT_DEFAULT_KEYS.has(e.key)) {
+        state.capsOn = e.getModifierState("CapsLock");
+
+        const k: Key = KEY_ALIAS[e.key as keyof typeof KEY_ALIAS] as Key
+            || e.key.toLowerCase();
+
+        if (
+            PREVENT_DEFAULT_KEYS.has(k)
+            || _k.game.inputCapturedBy.size > 0
+            || shouldPreventButtons(k, "byKey")
+            || shouldPreventButtons(e.code, "byKeyCode")
+        ) {
             e.preventDefault();
         }
+
         state.events.onOnce("input", () => {
-            const k: Key = KEY_ALIAS[e.key as keyof typeof KEY_ALIAS] as Key
-                || e.key.toLowerCase();
             const code = e.code;
 
             if (k === undefined) throw new Error(`Unknown key: ${e.key}`);
@@ -980,29 +1145,12 @@ export const initApp = (opt: {
                 state.charInputted.push(" ");
             }
             if (e.repeat) {
-                state.keyState.pressRepeat(k);
-                state.events.trigger("keyPressRepeat", k);
+                state.keyState.pressRepeat(k, state);
             }
             else {
                 state.lastInputDevice = "keyboard";
-
-                if (state.buttonsByKey.has(k)) {
-                    state.buttonsByKey.get(k)?.forEach((btn) => {
-                        state.buttonState.press(btn);
-                        state.events.trigger("buttonPress", btn);
-                    });
-                }
-
-                if (state.buttonsByKeyCode.has(code)) {
-                    state.buttonsByKeyCode.get(code)?.forEach((btn) => {
-                        state.buttonState.press(btn);
-                        state.events.trigger("buttonPress", btn);
-                    });
-                }
-
-                state.keyState.press(k);
-                state.events.trigger("keyPressRepeat", k);
-                state.events.trigger("keyPress", k);
+                state.buttonHandler.processKeydown(k, code, state);
+                state.keyState.press(k, state);
             }
         });
     };
@@ -1013,22 +1161,8 @@ export const initApp = (opt: {
                 || e.key.toLowerCase();
             const code = e.code;
 
-            if (state.buttonsByKey.has(k)) {
-                state.buttonsByKey.get(k)?.forEach((btn) => {
-                    state.buttonState.release(btn);
-                    state.events.trigger("buttonRelease", btn);
-                });
-            }
-
-            if (state.buttonsByKeyCode.has(code)) {
-                state.buttonsByKeyCode.get(code)?.forEach((btn) => {
-                    state.buttonState.release(btn);
-                    state.events.trigger("buttonRelease", btn);
-                });
-            }
-
-            state.keyState.release(k);
-            state.events.trigger("keyRelease", k);
+            state.buttonHandler.processKeyup(k, code, state);
+            state.keyState.release(k, state);
         });
     };
 
@@ -1040,28 +1174,24 @@ export const initApp = (opt: {
         state.events.onOnce("input", () => {
             const touches = [...e.changedTouches];
             const box = state.canvas.getBoundingClientRect();
+
             if (opt.touchToMouse !== false) {
-                state.mousePos = new Vec2(
+                state.mousePos = canvasToViewport(
                     touches[0].clientX - box.x,
                     touches[0].clientY - box.y,
                 );
-
                 state.lastInputDevice = "mouse";
-
-                if (state.buttonsByMouse.has("left")) {
-                    state.buttonsByMouse.get("left")?.forEach((btn) => {
-                        state.buttonState.press(btn);
-                        state.events.trigger("buttonPress", btn);
-                    });
-                }
-
-                state.mouseState.press("left");
-                state.events.trigger("mousePress", "left");
+                state.buttonHandler.processMousedown("left", state);
+                state.mouseState.press("left", state);
             }
+
             touches.forEach((t) => {
                 state.events.trigger(
                     "touchStart",
-                    new Vec2(t.clientX - box.x, t.clientY - box.y),
+                    canvasToViewport(
+                        t.clientX - box.x,
+                        t.clientY - box.y,
+                    ),
                     t,
                 );
             });
@@ -1074,19 +1204,24 @@ export const initApp = (opt: {
         state.events.onOnce("input", () => {
             const touches = [...e.changedTouches];
             const box = state.canvas.getBoundingClientRect();
+
             if (opt.touchToMouse !== false) {
                 const lastMousePos = state.mousePos;
-                state.mousePos = new Vec2(
+                state.mousePos = canvasToViewport(
                     touches[0].clientX - box.x,
                     touches[0].clientY - box.y,
                 );
                 state.mouseDeltaPos = state.mousePos.sub(lastMousePos);
                 state.events.trigger("mouseMove");
             }
+
             touches.forEach((t) => {
                 state.events.trigger(
                     "touchMove",
-                    new Vec2(t.clientX - box.x, t.clientY - box.y),
+                    canvasToViewport(
+                        t.clientX - box.x,
+                        t.clientY - box.y,
+                    ),
                     t,
                 );
             });
@@ -1097,27 +1232,24 @@ export const initApp = (opt: {
         state.events.onOnce("input", () => {
             const touches = [...e.changedTouches];
             const box = state.canvas.getBoundingClientRect();
-            if (opt.touchToMouse !== false) {
-                state.mousePos = new Vec2(
+
+            if (opt.touchToMouse != false) {
+                state.mousePos = canvasToViewport(
                     touches[0].clientX - box.x,
                     touches[0].clientY - box.y,
                 );
                 state.mouseDeltaPos = new Vec2(0, 0);
-
-                if (state.buttonsByMouse.has("left")) {
-                    state.buttonsByMouse.get("left")?.forEach((btn) => {
-                        state.buttonState.release(btn);
-                        state.events.trigger("buttonRelease", btn);
-                    });
-                }
-
-                state.mouseState.release("left");
-                state.events.trigger("mouseRelease", "left");
+                state.buttonHandler.processMouseup("left", state);
+                state.mouseState.release("left", state);
             }
+
             touches.forEach((t) => {
                 state.events.trigger(
                     "touchEnd",
-                    new Vec2(t.clientX - box.x, t.clientY - box.y),
+                    canvasToViewport(
+                        t.clientX - box.x,
+                        t.clientY - box.y,
+                    ),
                     t,
                 );
             });
@@ -1128,18 +1260,22 @@ export const initApp = (opt: {
         state.events.onOnce("input", () => {
             const touches = [...e.changedTouches];
             const box = state.canvas.getBoundingClientRect();
+
             if (opt.touchToMouse !== false) {
-                state.mousePos = new Vec2(
+                state.mousePos = canvasToViewport(
                     touches[0].clientX - box.x,
                     touches[0].clientY - box.y,
                 );
-                state.mouseState.release("left");
-                state.events.trigger("mouseRelease", "left");
+                state.mouseState.release("left", state);
             }
+
             touches.forEach((t) => {
                 state.events.trigger(
                     "touchEnd",
-                    new Vec2(t.clientX - box.x, t.clientY - box.y),
+                    canvasToViewport(
+                        t.clientX - box.x,
+                        t.clientY - box.y,
+                    ),
                     t,
                 );
             });
@@ -1164,9 +1300,14 @@ export const initApp = (opt: {
             state.events.trigger("show");
         }
         else {
+            releaseHeldInputsOnFocusLoss();
             state.isHidden = true;
             state.events.trigger("hide");
         }
+    };
+
+    winEvents.blur = () => {
+        releaseHeldInputsOnFocusLoss();
     };
 
     winEvents.gamepadconnected = (e) => {
@@ -1224,6 +1365,7 @@ export const initApp = (opt: {
     resizeObserver.observe(state.canvas);
 
     return {
+        state,
         dt,
         fixedDt,
         restDt,
@@ -1231,6 +1373,8 @@ export const initApp = (opt: {
         run,
         canvas: state.canvas,
         fps,
+        rawFPS,
+        setFixedSpeed,
         numFrames,
         quit,
         isHidden,
@@ -1238,6 +1382,7 @@ export const initApp = (opt: {
         isFullscreen,
         setCursor,
         screenshot,
+        screenshotToBlob,
         getGamepads,
         getCursor,
         setCursorLocked,
@@ -1256,12 +1401,17 @@ export const initApp = (opt: {
         isGamepadButtonPressed,
         isGamepadButtonDown,
         isGamepadButtonReleased,
+        isFocused,
         getGamepadStick,
+        getGamepadAnalogButton,
         isButtonPressed,
         isButtonDown,
         isButtonReleased,
-        setButton,
         getButton,
+        getButtons,
+        setButton,
+        pressButton,
+        releaseButton,
         charInputted,
         onResize,
         onKeyDown,
@@ -1279,6 +1429,8 @@ export const initApp = (opt: {
         onScroll,
         onHide,
         onShow,
+        onTabHide,
+        onTabShow,
         onGamepadButtonDown,
         onGamepadButtonPress,
         onGamepadButtonRelease,

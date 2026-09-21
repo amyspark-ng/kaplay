@@ -1,22 +1,32 @@
-// @ts-check
+/**
+ * @file Double Jump
+ * @description How to add a double jump
+ * @difficulty 1
+ * @tags game, comps
+ * @minver 3001.0
+ * @category concepts
+ */
 
+// How to use the doubleJump component in this little game
 kaplay({
     background: [141, 183, 255],
 });
 
+// Loads sprites
 loadSprite("bean", "/sprites/bean.png");
 loadSprite("coin", "/sprites/coin.png");
 loadSprite("grass", "/sprites/grass.png");
 loadSprite("spike", "/sprites/spike.png");
-loadSound("coin", "/examples/sounds/score.mp3");
+loadSound("coin", "/sounds/score.mp3");
 
+// Set the gravity acceleration (pixels per second)
 setGravity(4000);
 
 const PLAYER_SPEED = 640;
 const JUMP_FORCE = 1200;
 const NUM_PLATFORMS = 5;
 
-// a spinning component for fun
+// a spinning component for fun, for more info check the 'component' example
 function spin(speed = 1200) {
     let spinning = false;
     return {
@@ -37,7 +47,9 @@ function spin(speed = 1200) {
     };
 }
 
+// Setsup the game scene
 scene("game", () => {
+    // This score textObject holds a value property in a plain object
     const score = add([
         text("0", { size: 24 }),
         pos(24, 24),
@@ -50,11 +62,13 @@ scene("game", () => {
         anchor("center"),
         pos(0, 0),
         body({ jumpForce: JUMP_FORCE }),
+        // Adds the double jump component
         doubleJump(),
         rotate(0),
         spin(),
     ]);
 
+    // Adds a num of platforms that go from left to right
     for (let i = 1; i < NUM_PLATFORMS; i++) {
         add([
             sprite("grass"),
@@ -73,6 +87,7 @@ scene("game", () => {
     // go to the first platform
     bean.pos = get("platform")[0].pos.sub(0, 64);
 
+    // Generates coins on those platforms
     function genCoin(avoid) {
         const plats = get("platform");
         let idx = randi(0, plats.length);
@@ -98,7 +113,7 @@ scene("game", () => {
         add([
             pos(i * 64, height()),
             sprite("spike"),
-            area(),
+            area({ isSensor: true }),
             anchor("bot"),
             scale(),
             "danger",
@@ -117,8 +132,9 @@ scene("game", () => {
         genCoin(c.idx);
     });
 
-    // spin on double jump
+    // The double jupm component provides us this function that runs when we double jump
     bean.onDoubleJump(() => {
+        // So we can call the spin() method provided by the spin() component to spin
         bean.spin();
     });
 
@@ -133,14 +149,10 @@ scene("game", () => {
         bean.doubleJump();
     });
 
+    // Will move the bean left and right
     function move(x) {
         bean.move(x, 0);
-        if (bean.pos.x < 0) {
-            bean.pos.x = width();
-        }
-        else if (bean.pos.x > width()) {
-            bean.pos.x = 0;
-        }
+        bean.moveTo(clamp(bean.pos.x, 0, width()), bean.pos.y);
     }
 
     // both keys will trigger
@@ -152,6 +164,7 @@ scene("game", () => {
         move(PLAYER_SPEED);
     });
 
+    // The south button will call the doubleJump, for more info on gamepads check the 'gamepad' example
     onGamepadButtonPress("south", () => bean.doubleJump());
 
     onGamepadStick("left", (v) => {
@@ -175,6 +188,7 @@ scene("game", () => {
     });
 });
 
+// Sets up the scene where we win
 scene("win", (score) => {
     add([
         sprite("bean"),
@@ -196,6 +210,7 @@ scene("win", (score) => {
     onGamepadButtonPress("south", () => go("game"));
 });
 
+// Sets up the scene where we lose :(
 scene("lose", () => {
     add([
         text("You Lose"),
@@ -204,4 +219,5 @@ scene("lose", () => {
     onGamepadButtonPress("south", () => go("game"));
 });
 
+// Starts the game by entering the game scene
 go("game");

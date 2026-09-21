@@ -1,4 +1,13 @@
-// @ts-check
+/**
+ * @file Fade In
+ * @description How to fade in game objects
+ * @difficulty 0
+ * @tags visual, effects
+ * @minver 3001.0
+ * @category concepts
+ */
+
+// How to fade in an object
 
 kaplay();
 

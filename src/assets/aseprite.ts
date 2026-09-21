@@ -1,10 +1,14 @@
-import { assets } from "../kaplay";
-import { Quad } from "../math";
-import { getFileName } from "../utils";
+import { Quad } from "../math/math";
+import { _k } from "../shared";
+import { getFileName } from "../utils/dataURL";
 import { type Asset, fetchJSON } from "./asset";
 import { type LoadSpriteSrc, type SpriteAnim, SpriteData } from "./sprite";
 import { fixURL } from "./utils";
 
+/**
+ * @group Assets
+ * @subgroup Data
+ */
 export type AsepriteData = {
     frames: Array<{
         frame: {
@@ -41,16 +45,16 @@ export function loadAseprite(
         ? fetchJSON(jsonSrc)
         : Promise.resolve(jsonSrc);
 
-    return assets.sprites.add(
+    return _k.assets.sprites.add(
         name,
         resolveJSON.then((data: AsepriteData) => {
             const size = data.meta.size;
             const frames = data.frames.map((f: any) => {
                 return new Quad(
-                    f.frame.x / size.w,
-                    f.frame.y / size.h,
-                    f.frame.w / size.w,
-                    f.frame.h / size.h,
+                    f.frame.x, // / size.w,
+                    f.frame.y, // / size.h,
+                    f.frame.w, // / size.w,
+                    f.frame.h, // / size.h,
                 );
             });
             const anims: Record<string, number | SpriteAnim> = {};
@@ -69,9 +73,10 @@ export function loadAseprite(
                     };
                 }
             }
-            return SpriteData.from(imgSrc, {
+            return SpriteData.fromSpriteSrc(imgSrc, {
                 frames: frames,
                 anims: anims,
+                repack: false,
             });
         }),
     );

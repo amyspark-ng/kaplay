@@ -1,21 +1,29 @@
-import { SPRITE_ATLAS_HEIGHT, SPRITE_ATLAS_WIDTH } from "../constants";
-import { assets } from "../kaplay";
-import { Quad } from "../math";
-import { type Asset, fetchJSON, load } from "./asset";
+import type { Frame } from "../gfx/TexPacker";
+import { Quad } from "../math/math";
+import { _k } from "../shared";
+import type { TexFilter } from "../types";
+import { type Asset, fetchJSON, load, spriteSrcToImage } from "./asset";
 import {
+    fixFramesPixelsToFractionOfImage,
     type LoadSpriteOpt,
     type LoadSpriteSrc,
-    slice,
     SpriteData,
 } from "./sprite";
-import { fixURL } from "./utils";
+import { fixURL, slice } from "./utils";
 
+/**
+ * @group Assets
+ * @subgroup Data
+ */
 export type SpriteAtlasData = Record<string, SpriteAtlasEntry>;
 
 /**
  * A sprite in a sprite atlas.
+ *
+ * @group Assets
+ * @subgroup Types
  */
-export type SpriteAtlasEntry = LoadSpriteOpt & {
+export type SpriteAtlasEntry = Omit<LoadSpriteOpt, "repack"> & {
     /**
      * X position of the top left corner.
      */
@@ -37,6 +45,7 @@ export type SpriteAtlasEntry = LoadSpriteOpt & {
 export function loadSpriteAtlas(
     src: LoadSpriteSrc,
     data: SpriteAtlasData | string,
+    repack = true,
 ): Asset<Record<string, SpriteData>> {
     src = fixURL(src);
     if (typeof data === "string") {
@@ -49,33 +58,73 @@ export function loadSpriteAtlas(
         );
     }
     return load(
-        SpriteData.from(src).then((atlas) => {
+        spriteSrcToImage(src).then(img => {
+            const packer = _k.assets.packer;
             const map: Record<string, SpriteData> = {};
+            const wholeImageWidth = img.width, wholeImageHeight = img.height;
+
+            const mainFramesByFilter: Partial<Record<TexFilter, Frame>> = {};
 
             for (const name in data) {
-                const info = data[name];
-                const quad = atlas.frames[0];
-                const w = SPRITE_ATLAS_WIDTH * quad.w;
-                const h = SPRITE_ATLAS_HEIGHT * quad.h;
-                const frames = info.frames
-                    ? info.frames.map((f) =>
-                        new Quad(
-                            quad.x + (info.x + f.x) / w * quad.w,
-                            quad.y + (info.y + f.y) / h * quad.h,
-                            f.w / w * quad.w,
-                            f.h / h * quad.h,
-                        )
-                    )
-                    : slice(
-                        info.sliceX || 1,
-                        info.sliceY || 1,
-                        quad.x + info.x / w * quad.w,
-                        quad.y + info.y / h * quad.h,
-                        info.width / w * quad.w,
-                        info.height / h * quad.h,
+                let {
+                    x: spriteSectionX,
+                    y: spriteSectionY,
+                    width: spriteSectionWidth,
+                    height: spriteSectionHeight,
+                    frames,
+                    sliceX,
+                    sliceY,
+                    anims,
+                    slice9,
+                    filter,
+                } = data[name];
+                filter ??= _k.globalOpt.texFilter ?? "nearest";
+                const mainQuad = new Quad(
+                    spriteSectionX / wholeImageWidth,
+                    spriteSectionY / wholeImageHeight,
+                    spriteSectionWidth / wholeImageWidth,
+                    spriteSectionHeight / wholeImageHeight,
+                );
+                if (frames) {
+                    frames = fixFramesPixelsToFractionOfImage(
+                        frames,
+                        spriteSectionWidth,
+                        spriteSectionHeight,
                     );
-                const spr = new SpriteData(atlas.tex, frames, info.anims);
-                assets.sprites.addLoaded(name, spr);
+                }
+                else {
+                    frames = slice(sliceX || 1, sliceY || 1);
+                }
+
+                let spr: SpriteData;
+
+                if (repack) {
+                    spr = new SpriteData(
+                        frames.map(q =>
+                            packer.add(img, filter, mainQuad.scale(q))
+                        ),
+                        anims,
+                        slice9,
+                    );
+                }
+                else {
+                    const ourFrame = (mainFramesByFilter[filter] ??= packer.add(
+                        img,
+                        filter,
+                    ));
+                    spr = new SpriteData(
+                        frames.map(q =>
+                            packer._saveFrame(
+                                packer._getPacker(filter),
+                                ourFrame.tex,
+                                ourFrame.q.scale(mainQuad).scale(q),
+                            )
+                        ),
+                        anims,
+                        slice9,
+                    );
+                }
+                _k.assets.sprites.addLoaded(name, spr);
                 map[name] = spr;
             }
             return map;

@@ -1,53 +1,58 @@
-import { Asset, resolveShader, type Uniform } from "../../assets";
-import { game, gfx } from "../../kaplay";
-import { screen2ndc } from "../../math/various";
-import type { RenderProps, Vertex } from "../../types";
+import { Asset } from "../../assets/asset";
+import { resolveShader, type Uniform } from "../../assets/shader";
+import { _k } from "../../shared";
+import { type Attributes, BlendMode, type RenderProps } from "../../types";
 import type { Texture } from "../gfx";
+import { height, width } from "../stack";
 
 export function drawRaw(
-    verts: Vertex[],
+    attributes: Attributes,
     indices: number[],
     fixed: boolean = false,
     tex?: Texture,
     shaderSrc?: RenderProps["shader"],
-    uniform: Uniform = {},
+    uniform?: Uniform,
+    blend?: BlendMode,
 ) {
-    const parsedTex = tex ?? gfx.defTex;
-    const parsedShader = shaderSrc ?? gfx.defShader;
+    const parsedTex = tex ?? _k.gfx.whitePixel.tex;
+    const parsedShader = shaderSrc ?? _k.gfx.defShader;
     const shader = resolveShader(parsedShader);
 
     if (!shader || shader instanceof Asset) {
         return;
     }
 
-    const transform = (gfx.fixed || fixed)
-        ? gfx.transform
-        : game.cam.transform.mult(gfx.transform);
+    const transform = _k.gfx.transform;
 
-    const vv: number[] = [];
+    const vertLength = attributes.pos.length / 2;
+    const vv: number[] = new Array(vertLength * 8);
 
-    for (const v of verts) {
-        // normalized world space coordinate [-1.0 ~ 1.0]
-        const pt = screen2ndc(transform.multVec2(v.pos));
+    let index = 0;
+    for (let i = 0; i < vertLength; i++) {
+        _k.gfx.scratchPt.x = attributes.pos[i * 2];
+        _k.gfx.scratchPt.y = attributes.pos[i * 2 + 1];
+        transform.transformPointV(_k.gfx.scratchPt, _k.gfx.scratchPt);
 
-        vv.push(
-            pt.x,
-            pt.y,
-            v.uv.x,
-            v.uv.y,
-            v.color.r / 255,
-            v.color.g / 255,
-            v.color.b / 255,
-            v.opacity,
-        );
+        vv[index++] = _k.gfx.scratchPt.x;
+        vv[index++] = _k.gfx.scratchPt.y;
+        vv[index++] = attributes.uv[i * 2];
+        vv[index++] = attributes.uv[i * 2 + 1];
+        vv[index++] = attributes.color[i * 3] / 255;
+        vv[index++] = attributes.color[i * 3 + 1] / 255;
+        vv[index++] = attributes.color[i * 3 + 2] / 255;
+        vv[index++] = attributes.opacity[i];
     }
 
-    gfx.renderer.push(
-        gfx.ggl.gl.TRIANGLES,
+    _k.gfx.renderer.push(
+        _k.gfx.ggl.gl.TRIANGLES,
         vv,
         indices,
         shader,
         parsedTex,
         uniform,
+        blend ?? BlendMode.Normal,
+        width(),
+        height(),
+        _k.gfx.fixed || fixed,
     );
 }

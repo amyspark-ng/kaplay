@@ -1,24 +1,26 @@
-import { Asset, loadImg, loadProgress } from "../assets";
-import type { DrawSpriteOpt } from "../gfx";
-import type { Texture } from "../gfx/gfx";
-import { assets } from "../kaplay";
-import beanSpriteSrc from "../kassets/bean.png";
-import { Quad } from "../math/math";
-import { type ImageSource } from "../types";
-import { fixURL } from "./utils";
+import type { DrawSpriteOpt } from "../gfx/draw/drawSprite";
+import type { Frame } from "../gfx/TexPacker";
+import { Quad, quad } from "../math/math";
+import { _k } from "../shared";
+import { type ImageSource, type TexFilter } from "../types";
+import { Asset, loadImg, loadProgress, spriteSrcToImage } from "./asset";
+import { fixURL, slice } from "./utils";
 
 /**
  * Frame-based animation configuration.
+ *
+ * @group Assets
+ * @subgroup Types
  */
 export type SpriteAnim = number | {
     /**
      * The starting frame.
      */
-    from: number;
+    from?: number;
     /**
      * The end frame.
      */
-    to: number;
+    to?: number;
     /**
      * If this anim should be played in loop.
      */
@@ -31,24 +33,36 @@ export type SpriteAnim = number | {
      * This anim's speed in frames per second.
      */
     speed?: number;
+    /**
+     * List of frames for the animation.
+     *
+     * If this property exists, **from, to, and pingpong will be ignored**.
+     */
+    frames?: number[];
 };
 
 /**
  * A dict of name <-> animation.
+ *
+ * @group Assets
+ * @subgroup Types
  */
 export type SpriteAnims = Record<string, SpriteAnim>;
 
 // TODO: support frameWidth and frameHeight as alternative to slice
 /**
- * Sprite loading configuration.
+ * Sprite loading options.
+ *
+ * @group Assets
+ * @subgroup Types
  */
 export interface LoadSpriteOpt {
     /**
-     * If the defined area contains multiple sprites, how many frames are in the area hozizontally.
+     * If the single image area contains multiple sprites in a grid, how many frames are in the area horizontally.
      */
     sliceX?: number;
     /**
-     * If the defined area contains multiple sprites, how many frames are in the area vertically.
+     * If the single image area contains multiple sprites arranged in a grid, how many frames are in the area vertically.
      */
     sliceY?: number;
     /**
@@ -58,7 +72,11 @@ export interface LoadSpriteOpt {
      */
     slice9?: NineSlice;
     /**
-     * Individual frames.
+     * Individual frames' bounding boxes, if the frames are not in a grid and so sliceX/sliceY won't do.
+     * If present, overrides sliceX and sliceY. If the given sprite source is a list of images, each image is
+     * its own frame, and this is not used.
+     *
+     * Format: x, y, w, and h are in **pixels**
      *
      * @since v3000.0
      */
@@ -67,8 +85,30 @@ export interface LoadSpriteOpt {
      * Animation configuration.
      */
     anims?: SpriteAnims;
+    /**
+     * If the sprite is a single image.
+     */
+    singular?: boolean;
+    /**
+     * The tex filter to use, if different than the global sprite filter
+     */
+    filter?: TexFilter;
+    /**
+     * If you've already packed your spritesheet, you can set this to false to tell KAPLAY not to repack it
+     * when loading it into the main texture. However, this may negatively impact rendering performance if
+     * it causes future sprites to not fit and be moved to a different GPU texture.
+     *
+     * This doesn't apply if you use singular: true, because the entire image will be its own texture then.
+     *
+     * @default true
+     */
+    repack?: boolean;
 }
 
+/**
+ * @group Assets
+ * @subgroup Types
+ */
 export type NineSlice = {
     /**
      * The width of the 9-slice's left column.
@@ -86,78 +126,98 @@ export type NineSlice = {
      * The height of the 9-slice's bottom row.
      */
     bottom: number;
+    /**
+     * How regions should tile when the sprite is scaled.
+     * - `"none"`: All regions stretch (default)
+     * - `"edges"`: Edge regions (top, bottom, left, right) tile, center stretches
+     * - `"center"`: Center region tiles, edges stretch
+     * - `"all"`: Both edges and center tile
+     *
+     * Corners never tile.
+     */
+    tileMode?: "none" | "edges" | "center" | "all";
 };
 
+/**
+ * Possible values for loading an sprite using {@link loadSprite `loadSprite`}.
+ *
+ * @group Assets
+ * @subgroup Types
+ */
 export type LoadSpriteSrc = string | ImageSource;
 
 export class SpriteData {
-    tex: Texture;
-    frames: Quad[] = [new Quad(0, 0, 1, 1)];
-    anims: SpriteAnims = {};
-    slice9: NineSlice | null = null;
-
     constructor(
-        tex: Texture,
-        frames?: Quad[],
-        anims: SpriteAnims = {},
-        slice9: NineSlice | null = null,
-    ) {
-        this.tex = tex;
-        if (frames) this.frames = frames;
-        this.anims = anims;
-        this.slice9 = slice9;
-    }
+        public frames: Frame[],
+        public anims: SpriteAnims = {},
+        public slice9: NineSlice | null = null,
+    ) {}
 
     /**
      * @since v3001.0
      */
     get width() {
-        return this.tex.width * this.frames[0].w;
+        return this.frames[0].tex.width * this.frames[0].q.w;
     }
 
     get height() {
-        return this.tex.height * this.frames[0].h;
+        return this.frames[0].tex.height * this.frames[0].q.h;
     }
 
-    static from(
+    static fromSpriteSrc(
         src: LoadSpriteSrc,
         opt: LoadSpriteOpt = {},
     ): Promise<SpriteData> {
-        return typeof src === "string"
-            ? SpriteData.fromURL(src, opt)
-            : Promise.resolve(SpriteData.fromImage(src, opt));
+        return spriteSrcToImage(src).then(img =>
+            SpriteData.fromSingle(img, opt)
+        );
     }
 
-    static fromImage(
-        data: ImageSource,
+    static fromMultiple(
+        data: ImageSource[],
         opt: LoadSpriteOpt = {},
     ): SpriteData {
-        const [tex, quad] = assets.packer.add(data);
-        const frames = opt.frames
-            ? opt.frames.map((f) =>
-                new Quad(
-                    quad.x + f.x * quad.w,
-                    quad.y + f.y * quad.h,
-                    f.w * quad.w,
-                    f.h * quad.h,
-                )
-            )
-            : slice(
-                opt.sliceX || 1,
-                opt.sliceY || 1,
-                quad.x,
-                quad.y,
-                quad.w,
-                quad.h,
-            );
-        return new SpriteData(tex, frames, opt.anims, opt.slice9);
+        const filter = opt.filter ?? _k.globalOpt.texFilter ?? "nearest";
+        const frames = data.map(
+            opt.singular
+                ? (src => _k.assets.packer.addSingle(src, filter))
+                : (src => _k.assets.packer.add(src, filter)),
+        );
+        return new SpriteData(frames, opt.anims, opt.slice9);
     }
 
-    static fromURL(
-        url: string,
-        opt: LoadSpriteOpt = {},
-    ): Promise<SpriteData> {
-        return loadImg(url).then((img) => SpriteData.fromImage(img, opt));
+    static fromSingle(data: ImageSource, opt: LoadSpriteOpt = {}): SpriteData {
+        const frames: Quad[] = opt.frames
+            ? fixFramesPixelsToFractionOfImage(
+                opt.frames,
+                data.width,
+                data.height,
+            )
+            : slice(opt.sliceX || 1, opt.sliceY || 1);
+        const filter = opt.filter ?? _k.globalOpt.texFilter ?? "nearest";
+        if (opt.singular) {
+            const { tex, q: quad, id } = _k.assets.packer.addSingle(
+                data,
+                filter,
+            );
+            return new SpriteData(
+                frames.map(f => ({
+                    tex,
+                    q: quad.scale(f),
+                    id,
+                })),
+                opt.anims,
+                opt.slice9,
+            );
+        }
+        const sd = new SpriteData(
+            (opt.repack ?? true)
+                ? frames.map(frame => _k.assets.packer.add(data, filter, frame))
+                : _k.assets.packer.addPrepacked(data, filter, frames),
+            opt.anims,
+            opt.slice9,
+        );
+        return sd;
     }
 }
 
@@ -179,10 +239,13 @@ export function resolveSprite(
             throw new Error(`Sprite not found: ${src}`);
         }
     }
-    else if (src instanceof SpriteData) {
-        return Asset.loaded(src);
-    }
+    // else if (src instanceof SpriteData) {
+    //     return Asset.loaded(src);
+    // }
     else if (src instanceof Asset) {
+        // might be sometimes unnecessary here but if we're getting the sprite data directly
+        // then obviously we might be wanting to draw it.
+        _k.k.onLoad(() => _k.assets.packer.syncIfPending());
         return src;
     }
     else {
@@ -191,7 +254,7 @@ export function resolveSprite(
 }
 
 export function getSprite(name: string): Asset<SpriteData> | null {
-    return assets.sprites.get(name) ?? null;
+    return _k.assets.sprites.get(name) ?? null;
 }
 
 // load a sprite to asset manager
@@ -205,85 +268,64 @@ export function loadSprite(
     },
 ): Asset<SpriteData> {
     src = fixURL(src);
+
     if (Array.isArray(src)) {
         if (src.some((s) => typeof s === "string")) {
-            return assets.sprites.add(
+            return _k.assets.sprites.add(
                 name,
-                Promise.all(src.map((s) => {
-                    return typeof s === "string"
-                        ? loadImg(s)
-                        : Promise.resolve(s);
-                })).then((images) => createSpriteSheet(images, opt)),
+                Promise.all(
+                    src.map((s) => {
+                        return typeof s === "string"
+                            ? loadImg(s)
+                            : Promise.resolve(s);
+                    }),
+                ).then(images => SpriteData.fromMultiple(images, opt)),
             );
         }
         else {
-            return assets.sprites.addLoaded(
+            return _k.assets.sprites.addLoaded(
                 name,
-                createSpriteSheet(src as ImageSource[], opt),
+                SpriteData.fromMultiple(src as ImageSource[], opt),
             );
         }
     }
     else {
         if (typeof src === "string") {
-            return assets.sprites.add(name, SpriteData.from(src, opt));
-        }
-        else {
-            return assets.sprites.addLoaded(
+            return _k.assets.sprites.add(
                 name,
-                SpriteData.fromImage(src, opt),
+                SpriteData.fromSpriteSrc(src, opt),
             );
-        }
-    }
-}
-
-export function slice(x = 1, y = 1, dx = 0, dy = 0, w = 1, h = 1): Quad[] {
-    const frames: Quad[] = [];
-    const qw = w / x;
-    const qh = h / y;
-    for (let j = 0; j < y; j++) {
-        for (let i = 0; i < x; i++) {
-            frames.push(
-                new Quad(
-                    dx + i * qw,
-                    dy + j * qh,
-                    qw,
-                    qh,
-                ),
-            );
-        }
-    }
-    return frames;
-}
-
-// TODO: load synchronously if passed ImageSource
-
-export function createSpriteSheet(
-    images: ImageSource[],
-    opt: LoadSpriteOpt = {},
-): SpriteData {
-    const canvas = document.createElement("canvas");
-    const width = images[0].width;
-    const height = images[0].height;
-    canvas.width = width * images.length;
-    canvas.height = height;
-    const c2d = canvas.getContext("2d");
-    if (!c2d) throw new Error("Failed to create canvas context");
-    images.forEach((img, i) => {
-        if (img instanceof ImageData) {
-            c2d.putImageData(img, i * width, 0);
         }
         else {
-            c2d.drawImage(img, i * width, 0);
+            return _k.assets.sprites.addLoaded(
+                name,
+                SpriteData.fromSingle(src, opt),
+            );
         }
-    });
-    const merged = c2d.getImageData(0, 0, images.length * width, height);
-    return SpriteData.fromImage(merged, {
-        ...opt,
-        sliceX: images.length,
-        sliceY: 1,
-    });
+    }
 }
 
 export function loadBean(name: string = "bean"): Asset<SpriteData> {
-    return loadSprite(name, beanSpriteSrc);
+    if (!_k.game.defaultAssets.bean) {
+        throw new Error("You can't use bean in kaplay/mini");
+    }
+
+    return loadSprite(name, _k.game.defaultAssets.bean);
+}
+
+export function fixFramesPixelsToFractionOfImage(
+    frames: Quad[],
+    width: number,
+    height: number,
+): Quad[] {
+    // Given frames are dx, dy, width, and height in pixels, but internal
+    // format is fraction of image size, so convert it
+    return frames.map(q =>
+        quad(
+            q.x / width,
+            q.y / height,
+            q.w / width,
+            q.h / height,
+        )
+    );
 }

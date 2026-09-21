@@ -1,12 +1,12 @@
-import { gfx } from "../../kaplay";
+import { _k } from "../../shared";
 import { flush } from "../stack";
 
 export function drawStenciled(
     content: () => void,
     mask: () => void,
-    test: number,
+    test: GLenum,
 ) {
-    const gl = gfx.ggl.gl;
+    const gl = _k.gfx.ggl.gl;
 
     flush();
     gl.clear(gl.STENCIL_BUFFER_BIT);

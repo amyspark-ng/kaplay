@@ -1,58 +1,47 @@
-# KAPLAY
+# 🎮 KAPLAY.js — A JavaScript & TypeScript Game Library
 
-![KAPLAY](/kaplay.webp)
+<div align="center">
+  <img src="./kaplay.webp">
+</div>
 
-[**KAPLAY**](https://kaplayjs.com/) is a JavaScript library that helps you make
-games fast and fun!
+KAPLAY is the **fun-first**, 2D game library for **JavaScript** and
+**TypeScript**. It’s made to **feel like a game** while you're making games.
+Simple. Fast. Powerful.
 
-Start playing around with it in the [KAPLAYGROUND](https://play.kaplayjs.com/)
+✨ Whether you’re a beginner or an experienced dev, **KAPLAY** comes with its
+own **web-based editor** — the [KAPLAYGROUND](https://play.kaplayjs.com) — so
+you can try code instantly, and learn with more than **90 examples**!
 
-## Examples
+## 🎲 Quick Overview
 
 ```js
-// initialize context
-kaplay();
-
-// define gravity
-setGravity(2400);
-
-// load a sprite called "bean"
-loadSprite("bean", "sprites/bean.png");
-
-// compose the player game object from multiple components and add it to the game
-const bean = add([
-    sprite("bean"),
-    pos(80, 40),
-    area(),
-    body(),
-]);
-
-// press space to jump
-onKeyPress("space", () => {
-    // this method is provided by the "body" component above
-    bean.jump();
+// Start a game
+kaplay({
+    background: "#6d80fa",
 });
+
+// Load an image
+loadSprite("bean", "https://play.kaplayjs.com/bean.png");
+
+// Add a sprite to the scene
+add([
+    sprite("bean"), // it renders as a sprite
+]);
 ```
 
-KAPLAY uses a powerful component system to compose game objects and behaviors.
+Game objects are composed from simple, powerful components:
 
 ```js
-// add a game obj to the scene from a list of component
+// Add a Game Obj to the scene from a list of components
 const player = add([
-    // it renders as a sprite
-    sprite("bean"),
-    // it has a position
-    pos(100, 200),
-    // it has a collider
-    area(),
-    // it is a physical body which will respond to physics
-    body(),
-    // it has 8 of health
-    health(8),
-    // or give it tags for easier group behaviors
-    "player",
+    rect(40, 40), // it renders as a rectangle
+    pos(100, 200), // it has a position (coordinates)
+    area(), // it has a collider
+    body(), // it is a physical body which will respond to physics
+    health(8), // it has 8 health points
+    // Give it tags for easier group behaviors
     "friendly",
-    // plain objects fields are directly assigned to the game obj
+    // Give plain objects fields for associated data
     {
         dir: vec2(-1, 0),
         dead: false,
@@ -66,26 +55,20 @@ Blocky imperative syntax for describing behaviors
 ```js
 // .onCollide() comes from "area" component
 player.onCollide("enemy", () => {
-    // .hurt() comes from "health" component
-    player.hurt(1);
+    // .hp comes from "health" component
+    player.hp--;
 });
 
 // check fall death
 player.onUpdate(() => {
     if (player.pos.y >= height()) {
         destroy(player);
-        gameOver();
     }
 });
 
-// if 'player' onCollide with any object with tag "enemy", run the callback
-player.onCollide("enemy", () => {
-    player.hp -= 1;
-});
-
-// all objects with tag "enemy" will move towards 'player' every frame
-onUpdate("enemy", (e) => {
-    e.move(player.pos.sub(e.pos).unit().scale(e.speed));
+// All objects with tag "enemy" will move to the left
+onUpdate("enemy", (enemy) => {
+    enemy.move(-400, 0);
 });
 
 // move up 100 pixels per second every frame when "w" key is held down
@@ -94,107 +77,139 @@ onKeyDown("w", () => {
 });
 ```
 
-## Usage
+## 🖥️ Installation
 
-### Start a Project With `create-kaplay`
+### 🚀 Using `create-kaplay`
 
-The fastest way to start a KAPLAY game is with
-[`create-kaplay`](https://github.com/kaplayjs/create-kaplay)
-
-```sh
-$ npx create-kaplay mygame
-```
-
-This will create a directory called `mygame` for you, containing all the files
-we need
+The fastest way to get started:
 
 ```sh
-$ cd mygame
-$ npm run dev
+npx create-kaplay my-game
 ```
 
-Then open http://localhost:5173 and edit `src/game.js`
+Then open [http://localhost:5173](http://localhost:5173) and edit `src/game.js`.
 
-### Install as NPM Package
+### 📦 Install with package manager
 
 ```sh
-$ npm install kaplay
+npm install kaplay
 ```
 
-```js
-import kaplay from "kaplay";
-
-kaplay();
-
-add([
-    text("oh hi"),
-    pos(80, 40),
-]);
+```sh
+yarn add kaplay
 ```
 
-also works with CommonJS
-
-```js
-const kaboom = require("kaplay");
+```sh
+pnpm add kaplay
 ```
 
-Note that you'll need to use a bundler like `esbuild` or `webpack` to use KAPLAY
-with NPM
+```sh
+bun add kaplay
+```
 
-### Browser CDN
+> You will need a bundler like [Vite](https://vitejs.dev/) or
+> [ESBuild](https://esbuild.github.io/) to use KAPLAY in your project. Learn how
+> to setup ESbuild
+> [here](https://kaplayjs.com/guides/install/#setup-your-own-nodejs-environment).
 
-This exports a global `kaplay` function
+### 🌐 Use in Browser
+
+Include via CDN:
 
 ```html
-<script src="https://unpkg.com/kaplay@3000.1.17/dist/kaboom.js"></script>
-<script>
-kaplay()
-</script>
+<script src="https://unpkg.com/kaplay@3001.0.12/dist/kaplay.js"></script>
 ```
 
-or use with es modules
+### 📜 TypeScript Global Types
 
-```html
-<script type="module">
-import kaplay from "https://unpkg.com/kaplay@3000.1.17/dist/kaboom.mjs"
-kaplay()
-</script>
+If you're using **TypeScript**, you used `create-kaplay` or installed with a
+package manager and you want **global types**, you can load them using the
+following directive:
+
+```ts
+import "kaplay/global";
+
+vec2(10, 10); // typed!
 ```
 
-works all CDNs that supports NPM packages, e.g. jsdelivr, skypack
+But it's recommended to use `tsconfig.json` to include the types:
 
-## Documentation
+```json
+{
+  "compilerOptions": {
+    "types": ["./node_modules/kaplay/dist/declaration/global.d.ts"]
+  }
+}
+```
 
-- **v3001**: https://kaplayjs.com/
-- **v3000**: https://kaboomjs.com/
-- **v2000**: https://2000.kaboomjs.com/
-- **v0.5.0**: https://legacy.kaboomjs.com/
+> [!WARNING]\
+> If you are publishing a game (and not testing/learning) maybe you don't want
+> to use globals,
+> [see why](https://kaplayjs.com/guides/optimization/#avoid-global-namespace).
 
-## Community
+You can also use all **KAPLAY** source types importing them:
+
+```js
+import type { TextCompOpt } from "kaplay"
+import type * as KA from "kaplay" // if you prefer a namespace-like import
+
+interface MyTextCompOpt extends KA.TextCompOpt {
+  fallback: string;
+}
+```
+
+## 📚 Resources
+
+### 📖 Docs
+
+- [KAPLAY Official Docs](https://kaplayjs.com/docs/)
+- [KAPLAYGROUND](https://play.kaplayjs.com)
+
+### 📺 Tutorials
+
+- 🎥
+  [KAPLAY Library Crash Course by JSLegend ⚔️](https://www.youtube.com/watch?v=FdEYxGoy5_c)
+- 📖
+  [Learn JavaScript basics and KAPLAY to make games quickly](https://jslegenddev.substack.com/p/learn-the-basics-of-javascript-and)
+
+### 💬 Community
 
 - [Discord Server](https://discord.gg/aQ6RuQm3TF)
 - [GitHub Discussions](https://github.com/kaplayjs/kaplay/discussions)
-- [Twitter](https://twitter.com/Kaboomjs)
+- [Twitter/X](https://twitter.com/kaplayjs)
+- [BlueSky](https://bsky.app/profile/kaplayjs.com)
+- [Mastodon](https://mastodon.gamedev.place/@kaplay)
 
-### Games
+## 🎮 Games
 
-Collections of games made with KAPLAY (and Kaboom), selected by KAPLAY:
+Collections of games made with KAPLAY, selected by KAPLAY:
 
 - [Itch.io](https://itch.io/c/4494863/kag-collection)
 - [Newgrounds.com](https://www.newgrounds.com/playlist/379920/kaplay-games)
 
-## Credits
+## 🙌 Credits
 
-- Thanks to [tga](https://space55.xyz) for all his work on the original
-  Kaboom.js
-- Thanks to [mulfok](https://twitter.com/MulfoK) for the amazing
+KAPLAY is an open-source project, maintained by the
+[KAPLAY Team and core contributors](https://github.com/kaplayjs/kaplay/wiki/Development-Team)
+and with the support of many
+[other amazing contributors](https://github.com/kaplayjs/kaplay/graphs/contributors).
+
+### 🏆 Recognitions
+
+- Thanks to [mulfok](https://twitter.com/MulfoK) for the awesome
   [mulfok32](https://lospec.com/palette-list/mulfok32) color palette, used in
-  KAPLAY sprites
+  KAPLAY sprites and art
+- Thanks to [Pixabay](https://pixabay.com/users/pixabay-1/) for the great
+  [burp](https://pixabay.com/sound-effects/burp-104984/) sound, used in `burp()`
+  function
+- Thanks to [Kenney](https://kenney.nl/) for all used assets for examples
+  - [Impact Sound Pack](https://kenney.nl/assets/impact-sounds)
+  - [1-Bit Platformer Pack](https://kenney.nl/assets/1-bit-platformer-pack)
 - Thanks to [abrudz](https://github.com/abrudz) for the amazing
   [APL386 font](https://abrudz.github.io/APL386/)
 - Thanks to [Polyducks](http://polyducks.co.uk/) for the amazing
   [kitchen sink font](https://polyducks.itch.io/kitchen-sink-textmode-font) font
 - Thanks to [0x72](https://0x72.itch.io/) for the amazing
   [Dungeon Tileset](https://0x72.itch.io/dungeontileset-ii)
-- Thanks to [Kenney](https://kenney.nl/) for the amazing
-  [1-Bit Platformer Pack](https://kenney.nl/assets/1-bit-platformer-pack)
+- Thanks to @Minamotion for the `tiny` character sprite used in some of the
+  tests

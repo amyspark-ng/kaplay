@@ -1,28 +1,39 @@
-import { Vec2 } from "../math/math";
+import {
+    BOTTOM,
+    BOTTOM_LEFT,
+    BOTTOM_RIGHT,
+    CENTER,
+    LEFT,
+    RIGHT,
+    TOP,
+    TOP_LEFT,
+    TOP_RIGHT,
+} from "../constants/math";
+import { Vec2 } from "../math/Vec2";
 import { type Anchor } from "../types";
-import type { TextAlign } from "./draw";
+import type { TextAlign } from "./draw/drawText";
 
 // convert anchor string to a vec2 offset
 export function anchorPt(orig: Anchor | Vec2): Vec2 {
     switch (orig) {
         case "topleft":
-            return new Vec2(-1, -1);
+            return TOP_LEFT;
         case "top":
-            return new Vec2(0, -1);
+            return TOP;
         case "topright":
-            return new Vec2(1, -1);
+            return TOP_RIGHT;
         case "left":
-            return new Vec2(-1, 0);
+            return LEFT;
         case "center":
-            return new Vec2(0, 0);
+            return CENTER;
         case "right":
-            return new Vec2(1, 0);
+            return RIGHT;
         case "botleft":
-            return new Vec2(-1, 1);
+            return BOTTOM_LEFT;
         case "bot":
-            return new Vec2(0, 1);
+            return BOTTOM;
         case "botright":
-            return new Vec2(1, 1);
+            return BOTTOM_RIGHT;
         default:
             return orig;
     }

@@ -1,8 +1,15 @@
-// @ts-check
+/**
+ * @file Flame bar
+ * @description How to make mario-like flamebars
+ * @difficulty 1
+ * @tags visual, effects
+ * @minver 3001.0
+ * @category concepts
+ */
 
 // Mario-like flamebar
 
-// Start kaboom
+// Start kaplay
 kaplay();
 
 // Load assets
@@ -16,7 +23,7 @@ const SPEED = 320;
 const player = add([
     sprite("bean"),
     pos(80, 40),
-    area(),
+    area({ isSensor: true }),
 ]);
 
 // Player movement
@@ -49,7 +56,7 @@ function addFlamebar(position = vec2(0), angle = 0, num = 6) {
         flameHead.add([
             sprite("pineapple"),
             pos(0, i * 48),
-            area(),
+            area({ isSensor: true }),
             anchor("center"),
             "flame",
         ]);

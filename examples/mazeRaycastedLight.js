@@ -1,4 +1,12 @@
-// @ts-check
+/**
+ * @file Maze Raycasted Light
+ * @description How to create a maze and a shadow effect with it.
+ * @difficulty 2
+ * @tags math, game, effects
+ * @minver 4000.0
+ * @category concepts
+ * @test
+ */
 
 kaplay({
     scale: 0.5,
@@ -132,7 +140,7 @@ const bean = level.spawn(
     1,
 );
 
-onClick(() => {
+onMousePress(() => {
     const pos = level.fromScreen(mousePos());
     bean.setTarget(vec2(
         Math.floor(pos.x / TILE_WIDTH) * TILE_WIDTH + TILE_WIDTH / 2,

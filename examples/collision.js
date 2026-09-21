@@ -1,10 +1,18 @@
-// @ts-check
+/**
+ * @file Collision
+ * @description How to handle collisions betweem game objects.
+ * @difficulty 0
+ * @tags basics, comps, physics
+ * @minver 3001.0
+ * @category basics
+ */
 
 // Collision handling
 
-// Start kaboom
+// Start kaplay
 kaplay({
     scale: 2,
+    narrowPhaseCollisionAlgorithm: "sat",
 });
 
 // Load assets
@@ -65,7 +73,8 @@ for (let i = 0; i < 3; i++) {
         sprite("ghosty"),
         pos(x, y),
         // Both objects must have area() component to enable collision detection between
-        area(),
+        // The isSensor option tells area() to enable collision detection even without body()
+        area({ isSensor: true }),
         "enemy",
     ]);
 }
@@ -121,4 +130,4 @@ player.onUpdate(() => {
 // Can also be toggled by pressing F1
 debug.inspect = true;
 
-// Check out https://kaboomjs.com#AreaComp for everything area() provides
+// Check out https://kaplayjs.com/doc/AreaComp/ for everything area() provides

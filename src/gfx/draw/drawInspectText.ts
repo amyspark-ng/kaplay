@@ -1,12 +1,13 @@
-import { DBG_FONT } from "../../constants";
+import { DBG_FONT } from "../../constants/general";
 import { rgb } from "../../math/color";
-import { type Vec2, vec2 } from "../../math/math";
+import { vec2 } from "../../math/math";
+import { type Vec2 } from "../../math/Vec2";
 import { formatText } from "../formatText";
 import {
     height,
+    multTranslateV,
     popTransform,
     pushTransform,
-    pushTranslate,
     width,
 } from "../stack";
 import { drawFormattedText } from "./drawFormattedText";
@@ -18,8 +19,9 @@ export function drawInspectText(pos: Vec2, txt: string) {
         const pad = vec2(8);
 
         pushTransform();
-        pushTranslate(pos);
+        multTranslateV(pos);
 
+        // cSpell: ignore ftxt
         const ftxt = formatText({
             text: txt,
             font: DBG_FONT,
@@ -33,11 +35,11 @@ export function drawInspectText(pos: Vec2, txt: string) {
         const bh = ftxt.height + pad.x * 2;
 
         if (pos.x + bw >= width()) {
-            pushTranslate(vec2(-bw, 0));
+            multTranslateV(vec2(-bw, 0));
         }
 
         if (pos.y + bh >= height()) {
-            pushTranslate(vec2(0, -bh));
+            multTranslateV(vec2(0, -bh));
         }
 
         drawRect({

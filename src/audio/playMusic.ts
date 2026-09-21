@@ -1,19 +1,24 @@
-import { app, audio, debug, globalOpt } from "../kaplay";
-import { clamp } from "../math/math";
-import { KEvent } from "../utils";
+import { KEvent } from "../events/events";
+import { clamp } from "../math/clamp";
+import { _k } from "../shared";
 import type { AudioPlay, AudioPlayOpt } from "./play";
 
 export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
     const onEndEvents = new KEvent();
     const el = new Audio(url);
-    const src = audio.ctx.createMediaElementSource(el);
+    el.crossOrigin = "anonymous";
+    el.loop = Boolean(opt.loop);
+    el.volume = opt.volume ?? 1;
+    el.playbackRate = opt.speed ?? 1;
 
-    src.connect(opt.connectTo ?? audio.masterNode);
+    const src = _k.audio.ctx.createMediaElementSource(el);
+
+    src.connect(opt.connectTo ?? _k.audio.masterNode);
 
     function resumeAudioCtx() {
-        if (debug.paused) return;
-        if (app.isHidden() && !globalOpt.backgroundAudio) return;
-        audio.ctx.resume();
+        if (_k.debug.paused) return;
+        if (_k.app.isHidden() && !_k.globalOpt.backgroundAudio) return;
+        _k.audio.ctx.resume();
     }
 
     function play() {
@@ -87,11 +92,12 @@ export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
         },
 
         set detune(d) {
-            // TODO
+            throw new Error(
+                "Music cannot be detuned (limitation of the browser APIs, womp womp)",
+            );
         },
 
         get detune() {
-            // TODO
             return 0;
         },
 
@@ -105,7 +111,7 @@ export function playMusic(url: string, opt: AudioPlayOpt = {}): AudioPlay {
 
         connect(node?: AudioNode) {
             src.disconnect();
-            src.connect(node ?? audio.masterNode);
+            src.connect(node ?? _k.audio.masterNode);
         },
     };
 }

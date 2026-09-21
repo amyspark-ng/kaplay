@@ -1,4 +1,11 @@
-// @ts-check
+/**
+ * @file Ghost hunting
+ * @description A survival game about hunting ghosts
+ * @difficulty 2
+ * @tags game, effects, ai
+ * @minver 4000.0
+ * @category games
+ */
 
 kaplay({
     width: 1024,
@@ -9,8 +16,8 @@ kaplay({
 loadSprite("bean", "./sprites/bean.png");
 loadSprite("gun", "./sprites/gun.png");
 loadSprite("ghosty", "./sprites/ghosty.png");
-loadSprite("hexagon", "./examples/sprites/particle_hexagon_filled.png");
-loadSprite("star", "./examples/sprites/particle_star_filled.png");
+loadSprite("hexagon", "./sprites/particle_hexagon_filled.png");
+loadSprite("star", "./sprites/particle_star_filled.png");
 
 const nav = new NavMesh();
 // Hallway
@@ -198,7 +205,7 @@ function addEnemy(p) {
         {
             add() {
                 this.onHurt(() => {
-                    this.opacity = this.hp() / 100;
+                    this.opacity = this.hp / 100;
                 });
                 this.onDeath(() => {
                     const rect = this.localArea();
@@ -213,8 +220,8 @@ function addEnemy(p) {
                             lifeTime: [1.0, 1.5],
                             colors: [rgb(128, 128, 255), WHITE],
                             opacities: [0.1, 1.0, 0.0],
-                            texture: getSprite("star").data.tex,
-                            quads: [getSprite("star").data.frames[0]],
+                            texture: getSprite("star").data.frames[0].tex,
+                            quads: [getSprite("star").data.frames[0].q],
                         }, {
                             lifetime: 1.5,
                             shape: rect,
@@ -349,8 +356,8 @@ onMousePress(() => {
                 colors: [WHITE],
                 opacities: [1.0, 0.0],
                 angle: [0, 360],
-                texture: getSprite("hexagon").data.tex,
-                quads: [getSprite("hexagon").data.frames[0]],
+                texture: getSprite("hexagon").data.frames[0].tex,
+                quads: [getSprite("hexagon").data.frames[0].q],
             }, {
                 lifetime: 0.75,
                 rate: 0,
@@ -364,7 +371,7 @@ onMousePress(() => {
         });
         if (hit.object && hit.object.is("enemy")) {
             hit.object.moveBy(dir.unit().scale(10));
-            hit.object.hurt(20);
+            hit.object.hp -= 20;
         }
     }
 });

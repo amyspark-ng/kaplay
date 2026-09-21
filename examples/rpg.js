@@ -1,4 +1,11 @@
-// @ts-check
+/**
+ * @file RPG
+ * @description A basic RPG game
+ * @difficulty 1
+ * @tags game, ui
+ * @minver 3001.0
+ * @category games
+ */
 
 // simple rpg style walk and talk
 
@@ -70,7 +77,7 @@ scene("main", (levelIdx) => {
             ],
             "$": () => [
                 sprite("key"),
-                area(),
+                area({ isSensor: true }),
                 anchor("center"),
                 "key",
             ],

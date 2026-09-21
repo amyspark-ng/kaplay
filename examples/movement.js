@@ -1,8 +1,14 @@
-// @ts-check
-
+/**
+ * @file Movement
+ * @description How to make basic movement.
+ * @difficulty 0
+ * @tags basics, input
+ * @minver 3001.0
+ * @category concepts
+ */
 // Input handling and basic player movement
 
-// Start kaboom
+// Start kaplay
 kaplay();
 
 // Load assets
@@ -37,7 +43,7 @@ onKeyDown("down", () => {
 });
 
 // onClick() registers an event that runs once when left mouse is clicked
-onClick(() => {
+onMousePress(() => {
     // .moveTo() is provided by pos() component, changes the position
     player.moveTo(mousePos());
 });

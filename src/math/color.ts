@@ -1,12 +1,43 @@
-import { clamp, lerp } from "./math";
+import { CSS_COLOR_MAP } from "../constants/colorMap";
+import { _k } from "../shared";
+import { clamp } from "./clamp";
+import { lerpNumber } from "./lerpNumber";
 
+/**
+ * @group Math
+ * @subgroup Colors
+ */
 export type RGBValue = [number, number, number];
+
+/**
+ * @group Math
+ * @subgroup Colors
+ */
 export type RGBAValue = [number, number, number, number];
+
+/**
+ * @group Math
+ * @subgroup Colors
+ */
+export type CSSColorKeywords = keyof typeof CSS_COLOR_MAP;
+
+/**
+ * A serialized color.
+ *
+ * @group Components
+ * @subgroup Component Serialization
+ */
+export interface SerializedColor {
+    r: number;
+    g: number;
+    b: number;
+}
 
 /**
  * 0-255 RGBA color.
  *
  * @group Math
+ * @subgroup Colors
  */
 export class Color {
     /** Red (0-255. */
@@ -22,8 +53,7 @@ export class Color {
         this.b = clamp(b, 0, 255);
     }
 
-    // TODO: Type arr as tuple (no in ts-strict branch yet)
-    static fromArray(arr: number[]) {
+    static fromArray(arr: [number, number, number]) {
         return new Color(arr[0], arr[1], arr[2]);
     }
 
@@ -93,6 +123,41 @@ export class Color {
         );
     }
 
+    /**
+     * Create a color from a CSS color name
+     *
+     * @param cssColor - The color name.
+     *
+     * @example
+     * ```js
+     * loadHappy();
+     *
+     * add([
+     *     rect(512, 512, {
+     *         radius: [0, 96, 96, 96]
+     *     }),
+     *     color("#663399"),
+     *     pos(40, 40),
+     * ]);
+     *
+     * add([
+     *     text("css", { size: 192, font: "happy" }),
+     *     pos(90, 310)
+     * ]);
+     * ```
+     *
+     * @static
+     * @returns The color.
+     * @experimental This feature is in experimental phase, it will be fully released in v3001.1.0
+     */
+    static fromCSS(cssColor: CSSColorKeywords) {
+        const color = CSS_COLOR_MAP[cssColor];
+        // for js users
+        if (!color) throw new Error("Can't use an invalid CSS color");
+
+        return Color.fromHex(color);
+    }
+
     static RED = new Color(255, 0, 0);
     static GREEN = new Color(0, 255, 0);
     static BLUE = new Color(0, 0, 255);
@@ -135,9 +200,9 @@ export class Color {
      */
     lerp(dest: Color, t: number): Color {
         return new Color(
-            lerp(this.r, dest.r, t),
-            lerp(this.g, dest.g, t),
-            lerp(this.b, dest.b, t),
+            lerpNumber(this.r, dest.r, t),
+            lerpNumber(this.g, dest.g, t),
+            lerpNumber(this.b, dest.b, t),
         );
     }
 
@@ -205,8 +270,22 @@ export class Color {
     toArray(): Array<number> {
         return [this.r, this.g, this.b];
     }
+
+    serialize(): { r: number; g: number; b: number } {
+        return { r: this.r, g: this.g, b: this.b };
+    }
+
+    static deserialize(data: { r: number; g: number; b: number }): Color {
+        return new Color(data.r, data.g, data.b);
+    }
 }
 
+/**
+ * Possible color arguments for various functions.
+ *
+ * @group Math
+ * @subgroup Colors
+ */
 export type ColorArgs =
     // rgb(new Color(255, 255, 255))
     | [Color]
@@ -229,24 +308,34 @@ export type ColorArgs =
     // rgb("#ffffff")
     | [string]
     | [number[]]
-    | [];
+    | []
+    | [CSSColorKeywords & (string & {})]
+    | [number];
 
 export function rgb(...args: ColorArgs): Color {
     if (args.length === 0) {
         return new Color(255, 255, 255);
     }
     else if (args.length === 1) {
-        if (args[0] instanceof Color) {
+        const cl = args[0];
+
+        if (cl instanceof Color) {
             // rgb(new Color(255, 255, 255))
-            return args[0].clone();
+            return cl.clone();
         }
-        else if (typeof args[0] === "string") {
-            // rgb("#ffffff")
+        else if (typeof cl === "string") {
+            if (cl[0] != "#" && CSS_COLOR_MAP[cl as CSSColorKeywords]) {
+                return Color.fromCSS(cl as CSSColorKeywords);
+            }
+
             return Color.fromHex(args[0]);
+        }
+        else if (typeof cl === "number") {
+            return Color.fromHex(cl);
         }
         else if (Array.isArray(args[0]) && args[0].length === 3) {
             // rgb([255, 255, 255])
-            return Color.fromArray(args[0]);
+            return Color.fromArray(args[0] as [number, number, number]);
         }
     }
     else if (args.length === 2) {

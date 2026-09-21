@@ -4,47 +4,96 @@ import {
     FRAG_TEMPLATE,
     VERT_TEMPLATE,
     VERTEX_FORMAT,
-} from "../constants";
-import { type GfxCtx } from "../gfx";
-import { assets, gfx } from "../kaplay";
+} from "../constants/general";
+import { type GfxCtx, Texture } from "../gfx/gfx";
 import { Color } from "../math/color";
-import { Mat4, Vec2 } from "../math/math";
+import { Mat4 } from "../math/Mat4";
+import { Mat23 } from "../math/math";
+import { Vec2 } from "../math/Vec2";
+import { _k } from "../shared";
 import type { RenderProps } from "../types";
-import {
-    arrayIsColor,
-    arrayIsNumber,
-    arrayIsVec2,
-    getErrorMessage,
-} from "../utils";
+import { arrayIsColor, arrayIsNumber, arrayIsVec2 } from "../utils/asserts";
+import { getErrorMessage } from "../utils/log";
 import { fetchText, loadProgress } from "./asset";
 import { Asset } from "./asset";
 import { fixURL } from "./utils";
 
+class TextureUnitManager {
+    private static textureMap = new Map<Texture, number>();
+    private static maxUnit = 1;
+
+    constructor() {}
+
+    static getUnitForTexture(texture: Texture): number {
+        let unit = TextureUnitManager.textureMap.get(texture);
+
+        if (unit === undefined) {
+            // Assign new unit
+            unit = TextureUnitManager.maxUnit++;
+
+            // Check if this unit is actually available
+            const gl = _k.gfx.gl;
+            if (gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) < unit) {
+                throw new Error(
+                    "Using too many concurrent textures. Try to use less additional textures as uniforms",
+                );
+            }
+
+            // Assign texture to unit
+            gl.activeTexture(gl.TEXTURE0 + unit);
+            gl.bindTexture(gl.TEXTURE_2D, texture.glTex);
+            gl.activeTexture(gl.TEXTURE0);
+
+            // Remember location
+            TextureUnitManager.textureMap.set(texture, unit);
+        }
+
+        return unit;
+    }
+}
+
+/**
+ * @group Assets
+ * @subgroup Data
+ */
 export type ShaderData = Shader;
 
 /**
- * @group Math
+ * Possible values for a shader Uniform.
+ *
+ * @group Rendering
+ * @subgroup Shaders
  */
 export type UniformValue =
     | number
     | Vec2
     | Color
     | Mat4
+    | Mat23
     | number[]
     | Vec2[]
-    | Color[];
+    | Color[]
+    | Texture;
 
 /**
- * @group Math
+ * Possible uniform value, basically any but "u_tex".
+ *
+ * @group Rendering
+ * @subgroup Shaders
  */
-export type UniformKey = Exclude<string, "u_tex">;
+export type UniformKey = string;
+
 /**
- * @group Math
+ * @group Rendering
+ * @subgroup Shaders
  */
 export type Uniform = Record<UniformKey, UniformValue>;
 
 /**
- * @group GFX
+ * A shader, yeah.
+ *
+ * @group Rendering
+ * @subgroup Shaders
  */
 export class Shader {
     ctx: GfxCtx;
@@ -53,8 +102,11 @@ export class Shader {
     constructor(ctx: GfxCtx, vert: string, frag: string, attribs: string[]) {
         this.ctx = ctx;
         ctx.onDestroy(() => this.free());
+        this.glProgram = this.compile(vert, frag, attribs);
+    }
 
-        const gl = ctx.gl;
+    compile(vert: string, frag: string, attribs: string[]) {
+        const gl = this.ctx.gl;
         const vertShader = gl.createShader(gl.VERTEX_SHADER);
         const fragShader = gl.createShader(gl.FRAGMENT_SHADER);
 
@@ -70,7 +122,6 @@ export class Shader {
         gl.compileShader(fragShader);
 
         const prog = gl.createProgram();
-        this.glProgram = prog!;
 
         gl.attachShader(prog!, vertShader!);
         gl.attachShader(prog!, fragShader!);
@@ -84,10 +135,15 @@ export class Shader {
             if (vertError) throw new Error("VERTEX SHADER " + vertError);
             const fragError = gl.getShaderInfoLog(fragShader!);
             if (fragError) throw new Error("FRAGMENT SHADER " + fragError);
+            const linkError = gl.getProgramInfoLog(prog!);
+            if (linkError) throw new Error("LINK ERROR: " + linkError);
+            throw new Error("Unknown shader error (gl.LINK_STATUS was false)");
         }
 
         gl.deleteShader(vertShader);
         gl.deleteShader(fragShader);
+
+        return prog!;
     }
 
     bind() {
@@ -100,7 +156,7 @@ export class Shader {
 
     send(uniform: Uniform) {
         const gl = this.ctx.gl;
-        for (const name in uniform) {
+        for (const name of Object.keys(uniform)) {
             const val = uniform[name];
             const loc = gl.getUniformLocation(this.glProgram, name);
             if (typeof val === "number") {
@@ -109,15 +165,40 @@ export class Shader {
             else if (val instanceof Mat4) {
                 gl.uniformMatrix4fv(loc, false, new Float32Array(val.m));
             }
+            else if (val instanceof Mat23) {
+                gl.uniformMatrix4fv(
+                    loc,
+                    false,
+                    new Float32Array([
+                        val.a,
+                        val.b,
+                        0,
+                        0,
+                        val.c,
+                        val.d,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        val.e,
+                        val.f,
+                        0,
+                        1,
+                    ]),
+                );
+            }
             else if (val instanceof Color) {
                 gl.uniform3f(loc, val.r, val.g, val.b);
             }
             else if (val instanceof Vec2) {
                 gl.uniform2f(loc, val.x, val.y);
             }
+            else if (val instanceof Texture) {
+                gl.uniform1i(loc, TextureUnitManager.getUnitForTexture(val));
+            }
             else if (Array.isArray(val)) {
-                const first = val[0];
-
                 if (arrayIsNumber(val)) {
                     gl.uniform1fv(loc, val as number[]);
                 }
@@ -129,6 +210,11 @@ export class Shader {
                 }
             }
             else {
+                console.error(
+                    "unknown data passed to Shader.send:",
+                    val,
+                    "(key: " + name + ")",
+                );
                 throw new Error("Unsupported uniform data type");
             }
         }
@@ -155,14 +241,15 @@ export function makeShader(
             VERTEX_FORMAT.map((vert) => vert.name),
         );
     } catch (e) {
-        const lineOffset = 14;
         const fmt = /(?<type>^\w+) SHADER ERROR: 0:(?<line>\d+): (?<msg>.+)/;
         const match = getErrorMessage(e).match(fmt);
         if (!match?.groups) throw e;
-        const line = Number(match.groups.line) - lineOffset;
+        const line = Number(match.groups.line);
         const msg = match.groups.msg.trim();
         const ty = match.groups.type.toLowerCase();
-        throw new Error(`${ty} shader line ${line}: ${msg}`);
+        const lines = (ty == "vertex" ? vcode : fcode).split("\n");
+        const lineContents = lines[line - 1];
+        throw new Error(`${ty} shader line ${line}: ${msg}\n${lineContents}`);
     }
 }
 
@@ -170,7 +257,7 @@ export function resolveShader(
     src: RenderProps["shader"],
 ): ShaderData | Asset<ShaderData> | null {
     if (!src) {
-        return gfx.defShader;
+        return _k.gfx.defShader;
     }
     if (typeof src === "string") {
         const shader = getShader(src);
@@ -192,7 +279,7 @@ export function resolveShader(
 }
 
 export function getShader(name: string): Asset<ShaderData> | null {
-    return assets.shaders.get(name) ?? null;
+    return _k.assets.shaders.get(name) ?? null;
 }
 
 export function loadShader(
@@ -200,7 +287,10 @@ export function loadShader(
     vert?: string,
     frag?: string,
 ) {
-    return assets.shaders.addLoaded(name, makeShader(gfx.ggl, vert, frag));
+    return _k.assets.shaders.addLoaded(
+        name,
+        makeShader(_k.gfx.ggl, vert, frag),
+    );
 }
 
 export function loadShaderURL(
@@ -216,7 +306,7 @@ export function loadShaderURL(
             : Promise.resolve(null);
     const load = Promise.all([resolveUrl(vert), resolveUrl(frag)])
         .then(([vcode, fcode]: [string | null, string | null]) => {
-            return makeShader(gfx.ggl, vcode, fcode);
+            return makeShader(_k.gfx.ggl, vcode, fcode);
         });
-    return assets.shaders.add(name, load);
+    return _k.assets.shaders.add(name, load);
 }
