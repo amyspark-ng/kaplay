@@ -15,6 +15,7 @@ import type {
 } from "../types";
 
 import { GP_MAP } from "../constants/general";
+import type { TimerController } from "../ecs/components/misc/timer";
 import type {
     AppEventMap,
     GameObjEventNames,
@@ -700,19 +701,21 @@ export const initApp = (
             | number,
         maybeDelay?: number,
     ): KEventController {
-        const fallback = _k.globalOpt.doubleClickDelay ?? 0.5;
-
+        // if the second parameter is a string, that means is a button
         if (typeof actionOrButton === "string") {
-            // (n, button, action, delay?)
             const button = actionOrButton;
+            // that means the third parameter is the function
             const action = actionOrDelay as (button: MouseButton) => void;
-            const delay = maybeDelay ?? fallback;
-            return onMousePress(_multiClick(n, action, delay, button));
+            return onMousePress(
+                button,
+                _multiClick(n, action, maybeDelay),
+            );
         }
+        // if the second parameter is not a string, is a function
         else {
-            // (n, action, delay?)
             const action = actionOrButton;
-            const delay = (actionOrDelay as number) ?? fallback;
+            // that means the third parameter is the delay
+            const delay = actionOrDelay as number | undefined;
             return onMousePress(_multiClick(n, action, delay));
         }
     }
@@ -922,6 +925,7 @@ export const initApp = (
         state.charInputted = [];
         state.isMouseMoved = false;
         state.mouseDeltaPos = new Vec2(0);
+        isMultiClicked.clear();
 
         state.gamepadStates.forEach((s) => {
             s.buttonState.update();
@@ -1134,43 +1138,67 @@ export const initApp = (
     ];
 
     // code for working double and multiple clicks functions
-    // set of n:button strings, (2:left / 3:right etc) (2 clicks on left, 3 on right)
-    const isMultiClicked = new Set();
+    interface ClickState {
+        count: number; // clicks in the current streak
+        total: number; // clicks ever
+        timer?: TimerController;
+    }
+
+    // stores the state of every mouse button and
+    const clickState = new Map<MouseButton, ClickState>();
+
+    // set of n:button strings, (2:left / 3:right) (2 clicks on left, 3 on right)
+    const isMultiClicked = new Set<string>();
+
+    function getClickState(button: MouseButton): ClickState {
+        let s = clickState.get(button);
+        if (!s) {
+            s = { count: 0, total: 0, timer: undefined };
+            clickState.set(button, s);
+        }
+        return s;
+    }
+
+    // this functions runs whenever onMouseMultiPress is called
     function _multiClick(
         n: number,
-        cb: (btn: MouseButton, total: number) => void,
-        delay: number,
-        button?: MouseButton,
+        cb: (btn: MouseButton, clickcount: number) => void,
+        delay?: number,
     ) {
-        // stores the state of the mouse button (how many clicks total, clicks in a row, n goal and the timer)
-        // nth means clicks toward current target
-        const state = new Map(); // button -> { total, count, nth, timer }
+        // the state of every button local to this function call
+        const perbuttonstate = new Map<
+            MouseButton,
+            {
+                count: number;
+                total: number;
+                nth: number;
+                timer?: TimerController;
+            }
+        >();
 
-        function getState(btn: MouseButton) {
-            let s = state.get(btn);
+        // the state of every button globally
+        function getState(button: MouseButton) {
+            let s = perbuttonstate.get(button);
             if (!s) {
-                s = { total: 0, count: 0, nth: 0, timer: undefined };
-                state.set(btn, s);
+                s = { count: 0, total: 0, nth: 0, timer: undefined };
+                perbuttonstate.set(button, s);
             }
             return s;
         }
 
-        // returns a function that runs when you call onMouseMultiPress
-        // btn defaults to "left" in case this is called without one
-        return (btn = button ?? "left" as MouseButton) => {
-            // gets the state of that mouse button
-            const s = getState(btn);
-            // increases the stats
+        // returns a function that's actually called on the onMouseMultiPress function
+        return (button: MouseButton) => {
+            // gets the global state of the button and updates the stats
+            const s = getState(button);
             s.total++;
             s.count++;
             s.nth++;
 
-            // resets the timer
+            // if the streak is alive reset it
+            // if the time runs out (streak dies) the count is reset to 0
             if (s.timer) s.timer.cancel();
-            // creates a new timer to wait for the amount of delay
-            // if no new clicks then stops litening for them
             s.timer = _k.game.root.wait(
-                delay,
+                delay ?? _k.globalOpt.doubleClickDelay ?? 0.5,
                 () => {
                     s.nth = 0;
                     s.count = 0;
@@ -1178,11 +1206,10 @@ export const initApp = (
                 },
             );
 
-            // if the amount of clicks reaches the goal, the clicks reset and the function runs
+            // if the count per streak reaches the goal the count resets and the function runs
             if (s.nth === n) {
                 s.nth = 0;
-                isMultiClicked.add(`${n}:${btn}`);
-                cb(btn, s.count);
+                cb(button, s.count);
             }
         };
     }
@@ -1191,6 +1218,26 @@ export const initApp = (
         state.events.onOnce("input", () => {
             const m = MOUSE_BUTTONS[e.button];
             if (!m) return;
+
+            // this runs every time a click is done outside of any call of input events
+            // so the stats exist regardless onMouseMultiPress is called or not
+            // updates the isMultiClicked set so onMouseMultiPress can check the clicks per button
+            const s = getClickState(m);
+            s.count++;
+            s.total++;
+
+            // global total streak for all buttons
+            if (s.timer) s.timer.cancel();
+            s.timer = _k.game.root.wait(
+                _k.globalOpt.doubleClickDelay ?? 0.5,
+                () => {
+                    s.count = 0;
+                    s.timer = undefined;
+                },
+            );
+
+            // updates the isMultiClicked set
+            isMultiClicked.add(`${s.count}:${m}`);
 
             state.lastInputDevice = "mouse";
             state.buttonHandler.processMousedown(m, state);
